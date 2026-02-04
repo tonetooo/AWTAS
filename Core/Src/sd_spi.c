@@ -177,6 +177,9 @@ DSTATUS SD_disk_initialize (void)
     hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
     HAL_SPI_Init(&hspi2);
 
+    deselect();
+    HAL_Delay(20);
+
     for (n = 10; n; n--) xchg_spi(0xFF);    /* 80 dummy clocks */
 
     ty = 0;
@@ -198,7 +201,14 @@ DSTATUS SD_disk_initialize (void)
 
                 do {
                     // Try with HCS bit + Voltage Window (2.7-3.6V)
-                    res_acmd41 = send_cmd(ACMD41, (1UL << 30) | 0x00FF8000);
+                    // NOTE: Some cards are VERY picky about the gap between CMD55 and ACMD41
+                    // send_cmd handles CMD55 internally if bit 0x80 is set.
+                    
+                    // Standard capacity (HCS=0) or High Capacity (HCS=1)?
+                    // We are SDv2, so we should try HCS=1 first.
+                    
+                    res_acmd41 = send_cmd(ACMD41, (1UL << 30) | 0x00FF8000); // HCS | VCC
+                    
                     if(res_acmd41 == 0) break;
                     
                     // If failed, try with just HCS (standard)
@@ -206,7 +216,7 @@ DSTATUS SD_disk_initialize (void)
                          res_acmd41 = send_cmd(ACMD41, 1UL << 30);
                     }
                     
-                    HAL_Delay(1);
+                    HAL_Delay(10); // Increase delay to let card process
                 } while (--tmr && res_acmd41);
                 
                 if (tmr && res_acmd41 == 0) {
