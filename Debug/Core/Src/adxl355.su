@@ -1,0 +1,14 @@
+../Core/Src/adxl355.c:9:6:ADXL355_Write_Reg	24	static
+../Core/Src/adxl355.c:19:9:ADXL355_Read_Reg	24	static
+../Core/Src/adxl355.c:31:9:ADXL355_Read_Status	8	static
+../Core/Src/adxl355.c:35:9:ADXL355_Init	168	static
+../Core/Src/adxl355.c:82:6:ADXL355_Set_ODR	24	static
+../Core/Src/adxl355.c:98:6:ADXL355_Set_HPF	24	static
+../Core/Src/adxl355.c:120:6:ADXL355_Config_Activity_Int	24	static
+../Core/Src/adxl355.c:143:6:ADXL355_Config_WakeOnMotion	24	static
+../Core/Src/adxl355.c:173:6:ADXL355_Read_Data	40	static
+../Core/Src/adxl355.c:198:9:ADXL355_Get_FIFO_Entries	8	static
+../Core/Src/adxl355.c:202:6:ADXL355_Config_FIFO	16	static
+../Core/Src/adxl355.c:217:6:ADXL355_Read_FIFO_Data	40	static
+../Core/Src/adxl355.c:242:6:ADXL355_Read_FIFO	24	static
+../Core/Src/adxl355.c:254:5:ADXL355_Read_FIFO_Burst	32	static

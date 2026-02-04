@@ -1,0 +1,13 @@
+../Core/Src/sd_spi.c:23:12:select	2
+../Core/Src/sd_spi.c:33:13:deselect	1
+../Core/Src/sd_spi.c:40:13:xchg_spi	1
+../Core/Src/sd_spi.c:48:13:rcvr_spi_multi	1
+../Core/Src/sd_spi.c:54:13:xmit_spi_multi	1
+../Core/Src/sd_spi.c:64:12:wait_ready	3
+../Core/Src/sd_spi.c:81:13:get_crc7	4
+../Core/Src/sd_spi.c:98:13:send_cmd	10
+../Core/Src/sd_spi.c:167:9:SD_disk_initialize	24
+../Core/Src/sd_spi.c:273:9:SD_disk_status	1
+../Core/Src/sd_spi.c:283:9:SD_disk_read	16
+../Core/Src/sd_spi.c:351:9:SD_disk_write	19
+../Core/Src/sd_spi.c:408:9:SD_disk_ioctl	13
