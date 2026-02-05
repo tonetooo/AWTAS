@@ -184,7 +184,8 @@ DSTATUS SD_disk_initialize (void)
 
     ty = 0;
     UART_Print("[DEBUG] Sending CMD0...\r\n");
-    if (send_cmd(CMD0, 0) == 1) {           /* Enter Idle state */
+    BYTE cmd0_res = send_cmd(CMD0, 0);
+    if (cmd0_res == 1) {           /* Enter Idle state */
         UART_Print("[DEBUG] CMD0 Accepted. Sending CMD8...\r\n");
         if (send_cmd(CMD8, 0x1AA) == 1) {   /* SDv2? */
             UART_Print("[DEBUG] CMD8 Accepted. Card is SDv2. Checking voltage...\r\n");
@@ -254,7 +255,9 @@ DSTATUS SD_disk_initialize (void)
                 ty = 0;
         }
     } else {
-         UART_Print("[DEBUG] CMD0 Failed (No response or not IDLE)\r\n");
+         char msg[64];
+         sprintf(msg, "[DEBUG] CMD0 Failed. Result: %02X\r\n", cmd0_res);
+         UART_Print(msg);
     }
     CardType = ty;
     deselect();
