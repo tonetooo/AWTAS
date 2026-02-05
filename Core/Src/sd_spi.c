@@ -302,13 +302,7 @@ DRESULT SD_disk_read (
     if (!(CardType & CT_BLOCK)) sector *= 512;  /* Convert to byte address if needed */
 
     if (count == 1) {   /* Single block read */
-        if ((send_cmd(CMD17, sector) == 0) && select()) {
-             if (xchg_spi(0xFF) == 0xFE) { // Wait for start token (simplified, should loop)
-                // Actually wait for token loop is better but original code had it?
-                // Original code called rcvr_spi_multi which just receives.
-                // We need to wait for 0xFE.
-                // Let's rely on standard wait loop.
-             }
+        if (send_cmd(CMD17, sector) == 0) {
              // Wait for data packet
              BYTE token;
              UINT tmr = 200;
@@ -371,7 +365,7 @@ DRESULT SD_disk_write (
     if (!(CardType & CT_BLOCK)) sector *= 512;  /* Convert to byte address if needed */
 
     if (count == 1) {   /* Single block write */
-        if ((send_cmd(CMD24, sector) == 0) && select()) {
+        if (send_cmd(CMD24, sector) == 0) {
             xchg_spi(0xFE); // Start token
             xmit_spi_multi(buff, 512);
             xchg_spi(0xFF); xchg_spi(0xFF); // Dummy CRC
