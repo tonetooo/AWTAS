@@ -146,12 +146,14 @@ static BYTE send_cmd (
     buf[3] = (BYTE)(arg >> 8);
     buf[4] = (BYTE)(arg);
     buf[5] = get_crc7(buf, 5);
+    if (cmd == CMD0) buf[5] = 0x95;  /* Force correct CRC for CMD0 */
+    if (cmd == CMD8) buf[5] = 0x87;  /* Force correct CRC for CMD8 */
     
     xmit_spi_multi(buf, 6);
 
     /* Receive command response */
     if (cmd == CMD12) xchg_spi(0xFF);   /* Skip a stuff byte when stop reading */
-    n = 10;                             /* Wait for a valid response in timeout of 10 attempts */
+    n = 200;                             /* Wait for a valid response (increased from 10) */
     do
         res = xchg_spi(0xFF);
     while ((res & 0x80) && --n);
