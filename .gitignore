@@ -1,0 +1,8 @@
+.DS_Store
+.vscode/
+.idea/
+**/Debug/
+**/*.o
+**/*.d
+**/*.su
+**/*.cyclo
