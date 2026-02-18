@@ -505,6 +505,8 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
     if (strstr(out_buffer, "RANGE=") != NULL) keys++;
     if (strstr(out_buffer, "ODR_HZ=") != NULL) keys++;
     if (strstr(out_buffer, "TRIGGER_G=") != NULL) keys++;
+    if (strstr(out_buffer, "HPF=") != NULL) keys++;
+    if (strstr(out_buffer, "ACT_COUNT=") != NULL) keys++;
     printf("[MODEM] CFG keys found: %d\r\n", keys);
     if (w == 0 || keys == 0) {
         Modem_PowerOff();

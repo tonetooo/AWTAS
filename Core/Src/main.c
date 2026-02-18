@@ -60,9 +60,11 @@ FRESULT fres;
 // Shadow variables for display
 const char* range_str[] = {"+/- 2g", "+/- 4g", "+/- 8g"};
 const char* odr_str[] = {"?", "4000Hz", "2000Hz", "1000Hz", "500Hz", "250Hz", "125Hz", "62.5Hz", "31.25Hz"};
-int cur_range_idx = 0; // Default 2g
-int cur_odr_idx = 6;   // Default 125Hz
-float trigger_g = 0.5f; // Default 0.5g
+int cur_range_idx = 0;
+int cur_odr_idx = 6;
+float trigger_g = 0.5f;
+uint8_t hpf_enabled = 0;
+uint8_t act_count = 5;
 
 // Placeholder variables for future power measurement peripheral
 float voltage_val = 0.0f;
@@ -218,6 +220,48 @@ static void Apply_Remote_Config(const char* cfg) {
                     trigger_g = t;
                     printf("[CONFIG] Trigger set to %.2f G\r\n", trigger_g);
                 }
+            } else if (len >= 4 && strncmp(line, "HPF=", 4) == 0) {
+                const char* val = line + 4;
+                while (*val == ' ' || *val == '\t') {
+                    val++;
+                }
+                char tmp[8];
+                size_t vlen = 0;
+                while (val[vlen] != 0 && val[vlen] != '\r' && val[vlen] != '\n' && vlen < sizeof(tmp) - 1) {
+                    tmp[vlen] = val[vlen];
+                    vlen++;
+                }
+                tmp[vlen] = 0;
+                for (size_t i = 0; i < vlen; i++) {
+                    if (tmp[i] >= 'a' && tmp[i] <= 'z') {
+                        tmp[i] = (char)(tmp[i] - 'a' + 'A');
+                    }
+                }
+                uint8_t enable = 0;
+                if (tmp[0] == 'O') {
+                    if (tmp[1] == 'N') {
+                        enable = 1;
+                    } else if (tmp[1] == 'F' && tmp[2] == 'F') {
+                        enable = 0;
+                    }
+                } else if (tmp[0] == '1') {
+                    enable = 1;
+                } else if (tmp[0] == '0') {
+                    enable = 0;
+                }
+                hpf_enabled = enable;
+                ADXL355_Set_HPF(hpf_enabled);
+                printf("[CONFIG] HPF %s\r\n", hpf_enabled ? "ON" : "OFF");
+            } else if (len >= 10 && strncmp(line, "ACT_COUNT=", 10) == 0) {
+                const char* val = line + 10;
+                while (*val == ' ' || *val == '\t') {
+                    val++;
+                }
+                int c = atoi(val);
+                if (c < 1) c = 1;
+                if (c > 255) c = 255;
+                act_count = (uint8_t)c;
+                printf("[CONFIG] ACT_COUNT set to %d\r\n", c);
             }
         }
         if (*line_end == 0) {
@@ -473,8 +517,8 @@ int main(void)
               case 'i': {
                   monitoring = 0; logging = 0;
                   if (fres != FR_OK) { printf("SD Not Mounted!\r\n"); break; }
-                  printf("\r\nARMING INTERRUPT MODE (Threshold: %.2f G)...\r\n", trigger_g);
-                  ADXL355_Config_WakeOnMotion(trigger_g, 5); // Count=5
+                  printf("\r\nARMING INTERRUPT MODE (Threshold: %.2f G, Count: %d)...\r\n", trigger_g, act_count);
+                  ADXL355_Config_WakeOnMotion(trigger_g, act_count);
                   printf("ARMED. Waiting for motion... (Press 'q' to abort)\r\n");
                   Print_Power_State(PWR_STATE_LOW_POWER_WAITING);
                   
