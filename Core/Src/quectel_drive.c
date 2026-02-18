@@ -75,7 +75,6 @@ HAL_StatusTypeDef Modem_PowerOn(void) {
     printf("[MODEM] Esperando inicio de firmware y RDY (15s)...\r\n");
     
     uint32_t start_firmware = HAL_GetTick();
-    uint8_t last_byte = 0xFF;
     uint32_t null_count = 0;
 
     char rdy_buf[3] = {0};

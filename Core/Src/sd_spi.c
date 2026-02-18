@@ -39,13 +39,6 @@ static uint8_t spi_send(uint8_t data)
     return rx_data;
 }
 
-static void spi_send_dummy(uint32_t count)
-{
-    for (uint32_t i = 0; i < count; i++) {
-        spi_send(0xFF);
-    }
-}
-
 // Wait for card ready
 static uint8_t sd_wait_ready(void)
 {

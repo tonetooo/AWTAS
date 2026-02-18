@@ -572,7 +572,7 @@ int main(void)
                                       break;
                                   }
                                   
-                                  uint8_t fifo_entries = ADXL355_Get_FIFO_Entries();
+                                  (void)ADXL355_Get_FIFO_Entries();
                                   uint32_t current_tick = HAL_GetTick();
                                   uint32_t elapsed_ms = current_tick - start_tick;
                                   
@@ -664,7 +664,7 @@ int main(void)
 
       if (logging) {
           ADXL355_Read_Data(&data);
-          uint8_t fifo_entries = ADXL355_Get_FIFO_Entries();
+          (void)ADXL355_Get_FIFO_Entries();
           uint32_t current_tick = HAL_GetTick();
           uint32_t elapsed_ms = current_tick - start_tick;
           
