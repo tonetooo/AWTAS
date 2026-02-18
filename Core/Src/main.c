@@ -130,7 +130,28 @@ static void Apply_Remote_Config(const char* cfg) {
                 while (*val == ' ' || *val == '\t') {
                     val++;
                 }
-                int g = atoi(val);
+                char tmp[8];
+                size_t vlen = 0;
+                while (val[vlen] != 0 && val[vlen] != '\r' && val[vlen] != '\n' && vlen < sizeof(tmp) - 1) {
+                    tmp[vlen] = val[vlen];
+                    vlen++;
+                }
+                tmp[vlen] = 0;
+                for (size_t i = 0; i < vlen; i++) {
+                    if (tmp[i] >= 'a' && tmp[i] <= 'z') {
+                        tmp[i] = (char)(tmp[i] - 'a' + 'A');
+                    }
+                }
+                int g = 0;
+                if (tmp[0] == '2') {
+                    g = 2;
+                } else if (tmp[0] == '4') {
+                    g = 4;
+                } else if (tmp[0] == '8') {
+                    g = 8;
+                } else {
+                    g = atoi(tmp);
+                }
                 if (g <= 2) {
                     ADXL355_Set_Range(ADXL355_RANGE_2G);
                     cur_range_idx = 0;

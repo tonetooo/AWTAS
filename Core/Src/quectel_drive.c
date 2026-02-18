@@ -382,8 +382,8 @@ HAL_StatusTypeDef Modem_UploadFile(const char* filename) {
 }
 
 HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
-    if (BACKEND_UPLOAD_URL[0] == 0) {
-        printf("[MODEM] BACKEND_UPLOAD_URL no configurado.\r\n");
+    if (BACKEND_CONFIG_URL[0] == 0) {
+        printf("[MODEM] BACKEND_CONFIG_URL no configurado.\r\n");
         return HAL_ERROR;
     }
     if (out_buffer == NULL || out_size == 0) {
@@ -399,21 +399,11 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
     Modem_SendAT("AT+QSSLCFG=\"sslversion\",1,4", "OK", 1000);
     Modem_SendAT("AT+QSSLCFG=\"seclevel\",1,0", "OK", 1000);
     Modem_SendAT("AT+QHTTPCFG=\"sslctxid\",1", "OK", 1000);
-    char base[256];
-    memset(base, 0, sizeof(base));
-    strncpy(base, BACKEND_UPLOAD_URL, sizeof(base) - 1);
-    char* slash = strrchr(base, '/');
-    if (slash != NULL) {
-        slash[1] = 0;
-        strncat(base, "config", sizeof(base) - strlen(base) - 1);
-    } else {
-        strncat(base, "/config", sizeof(base) - strlen(base) - 1);
-    }
     char url[256];
     if (BACKEND_API_KEY[0] != 0) {
-        snprintf(url, sizeof(url), "%s?name=AWTAS_CONFIG.TXT&key=%s", base, BACKEND_API_KEY);
+        snprintf(url, sizeof(url), "%s?name=AWTAS_CONFIG.TXT&key=%s&compact=1", BACKEND_CONFIG_URL, BACKEND_API_KEY);
     } else {
-        snprintf(url, sizeof(url), "%s?name=AWTAS_CONFIG.TXT", base);
+        snprintf(url, sizeof(url), "%s?name=AWTAS_CONFIG.TXT&compact=1", BACKEND_CONFIG_URL);
     }
     printf("[MODEM] CFG URL: %s\r\n", url);
     char cmd[64];
@@ -438,7 +428,7 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
         }
     }
     printf("[MODEM] CFG HTTP Status: %d\r\n", http_code);
-    if (http_code < 200 || http_code >= 300) {
+    if (http_code != 0 && (http_code < 200 || http_code >= 300)) {
         Modem_PowerOff();
         return HAL_ERROR;
     }
