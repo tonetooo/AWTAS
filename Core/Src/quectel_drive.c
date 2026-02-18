@@ -438,6 +438,7 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
     char raw[MODEM_BUFFER_SIZE];
     memset(raw, 0, sizeof(raw));
     uint32_t last_byte_tick = HAL_GetTick();
+    uint32_t start_total = last_byte_tick;
     uint16_t idx = 0;
     while (1) {
         uint8_t b;
@@ -454,35 +455,60 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
                 }
             }
         } else {
-            if (HAL_GetTick() - last_byte_tick > 2000) {
+            if (HAL_GetTick() - last_byte_tick > 12000) {
                 break;
             }
         }
-        if (HAL_GetTick() - last_byte_tick > 60000) {
+        if (HAL_GetTick() - start_total > 60000) {
             break;
         }
     }
-    char* body = raw;
-    char* after_hdr = strstr(raw, "\n");
-    char* after_hdr_cr = strstr(raw, "\r");
-    if (after_hdr || after_hdr_cr) {
-        char* first = after_hdr;
-        if (first == NULL || (after_hdr_cr && after_hdr_cr < first)) first = after_hdr_cr;
-        if (first) body = first + 1;
-    }
-    char* okpos = strstr(body, "\r\nOK\r\n");
-    size_t body_len = okpos ? (size_t)(okpos - body) : strlen(body);
-    if (body_len >= out_size) body_len = out_size - 1;
+    char* okpos_global = strstr(raw, "\r\nOK\r\n");
+    char* r1 = strstr(raw, "RANGE=");
+    char* r2 = strstr(raw, "ODR_HZ=");
+    char* r3 = strstr(raw, "TRIGGER_G=");
+    char* start_keys = NULL;
+    if (r1 && (!start_keys || r1 < start_keys)) start_keys = r1;
+    if (r2 && (!start_keys || r2 < start_keys)) start_keys = r2;
+    if (r3 && (!start_keys || r3 < start_keys)) start_keys = r3;
     size_t w = 0;
-    for (size_t i = 0; i < body_len && w < out_size - 1; i++) {
-        unsigned char c = (unsigned char)body[i];
-        if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
-            out_buffer[w++] = (char)c;
+    if (start_keys) {
+        const char* endp = okpos_global ? okpos_global : (raw + strlen(raw));
+        const char* p = start_keys;
+        while (p < endp && w < out_size - 1) {
+            unsigned char c = (unsigned char)*p++;
+            if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
+                out_buffer[w++] = (char)c;
+            }
         }
+        out_buffer[w] = 0;
+    } else {
+        char* body = raw;
+        char* after_hdr = strstr(raw, "\n");
+        char* after_hdr_cr = strstr(raw, "\r");
+        if (after_hdr || after_hdr_cr) {
+            char* first = after_hdr;
+            if (first == NULL || (after_hdr_cr && after_hdr_cr < first)) first = after_hdr_cr;
+            if (first) body = first + 1;
+        }
+        char* okpos = strstr(body, "\r\nOK\r\n");
+        size_t body_len = okpos ? (size_t)(okpos - body) : strlen(body);
+        if (body_len >= out_size) body_len = out_size - 1;
+        for (size_t i = 0; i < body_len && w < out_size - 1; i++) {
+            unsigned char c = (unsigned char)body[i];
+            if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
+                out_buffer[w++] = (char)c;
+            }
+        }
+        out_buffer[w] = 0;
     }
-    out_buffer[w] = 0;
     printf("[MODEM] CFG bytes: %lu\r\n", (unsigned long)w);
-    if (w == 0) {
+    int keys = 0;
+    if (strstr(out_buffer, "RANGE=") != NULL) keys++;
+    if (strstr(out_buffer, "ODR_HZ=") != NULL) keys++;
+    if (strstr(out_buffer, "TRIGGER_G=") != NULL) keys++;
+    printf("[MODEM] CFG keys found: %d\r\n", keys);
+    if (w == 0 || keys == 0) {
         Modem_PowerOff();
         return HAL_ERROR;
     }
