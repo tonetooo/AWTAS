@@ -434,7 +434,6 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
     }
     const char* read_cmd = "AT+QHTTPREAD=60\r\n";
     HAL_UART_Transmit(_modem_uart, (uint8_t*)read_cmd, strlen(read_cmd), 1000);
-    Modem_WaitFor("CONNECT", 10000);
     char raw[MODEM_BUFFER_SIZE];
     memset(raw, 0, sizeof(raw));
     uint32_t last_byte_tick = HAL_GetTick();
