@@ -111,6 +111,103 @@ void Print_Menu(void) {
     printf("[SENSOR] i: Interrupt Mode (Wake-on-Motion)\r\n");
     printf("[SENSOR] q: Stop/Back\r\n");
 }
+
+static void Apply_Remote_Config(const char* cfg) {
+    const char* line = cfg;
+    while (line && *line) {
+        const char* line_end = line;
+        while (*line_end && *line_end != '\n' && *line_end != '\r') {
+            line_end++;
+        }
+        size_t len = (size_t)(line_end - line);
+        while (len > 0 && (line[0] == ' ' || line[0] == '\t')) {
+            line++;
+            len--;
+        }
+        if (len > 0) {
+            if (len >= 6 && strncmp(line, "RANGE=", 6) == 0) {
+                const char* val = line + 6;
+                while (*val == ' ' || *val == '\t') {
+                    val++;
+                }
+                int g = atoi(val);
+                if (g <= 2) {
+                    ADXL355_Set_Range(ADXL355_RANGE_2G);
+                    cur_range_idx = 0;
+                } else if (g <= 4) {
+                    ADXL355_Set_Range(ADXL355_RANGE_4G);
+                    cur_range_idx = 1;
+                } else {
+                    ADXL355_Set_Range(ADXL355_RANGE_8G);
+                    cur_range_idx = 2;
+                }
+                printf("[CONFIG] RANGE set to %s\r\n", range_str[cur_range_idx]);
+            } else if (len >= 7 && strncmp(line, "ODR_HZ=", 7) == 0) {
+                const char* val = line + 7;
+                while (*val == ' ' || *val == '\t') {
+                    val++;
+                }
+                int odr = atoi(val);
+                switch (odr) {
+                    case 4000:
+                        ADXL355_Set_ODR(ADXL355_ODR_4000HZ);
+                        cur_odr_idx = 1;
+                        break;
+                    case 2000:
+                        ADXL355_Set_ODR(ADXL355_ODR_2000HZ);
+                        cur_odr_idx = 2;
+                        break;
+                    case 1000:
+                        ADXL355_Set_ODR(ADXL355_ODR_1000HZ);
+                        cur_odr_idx = 3;
+                        break;
+                    case 500:
+                        ADXL355_Set_ODR(ADXL355_ODR_500HZ);
+                        cur_odr_idx = 4;
+                        break;
+                    case 250:
+                        ADXL355_Set_ODR(ADXL355_ODR_250HZ);
+                        cur_odr_idx = 5;
+                        break;
+                    case 125:
+                        ADXL355_Set_ODR(ADXL355_ODR_125HZ);
+                        cur_odr_idx = 6;
+                        break;
+                    case 62:
+                        ADXL355_Set_ODR(ADXL355_ODR_62_5HZ);
+                        cur_odr_idx = 7;
+                        break;
+                    case 31:
+                        ADXL355_Set_ODR(ADXL355_ODR_31_25HZ);
+                        cur_odr_idx = 8;
+                        break;
+                    default:
+                        break;
+                }
+                if (cur_odr_idx > 0) {
+                    printf("[CONFIG] ODR set to %s\r\n", odr_str[cur_odr_idx]);
+                }
+            } else if (len >= 10 && strncmp(line, "TRIGGER_G=", 10) == 0) {
+                const char* val = line + 10;
+                while (*val == ' ' || *val == '\t') {
+                    val++;
+                }
+                float t = atof(val);
+                if (t > 0.0f) {
+                    trigger_g = t;
+                    printf("[CONFIG] Trigger set to %.2f G\r\n", trigger_g);
+                }
+            }
+        }
+        if (*line_end == 0) {
+            break;
+        }
+        if (*line_end == '\r' && line_end[1] == '\n') {
+            line_end++;
+        }
+        line = line_end + 1;
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -149,10 +246,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   Modem_Init(&huart1);
   printf("\r\n--- AWTAS INITIALIZING (AUTONOMOUS WIRELESS TRIAXIAL ADQUISITION SYSTEM) ---\r\n");
-  
-  // Encender el módem al inicio para ver feedback en terminal
   Modem_PowerOn();
-  
   if (ADXL355_Init(&hspi2)) {
       printf("[SENSOR] ADXL355 Initialized Successfully\r\n");
   } else {
@@ -164,6 +258,13 @@ int main(void)
       fres = FR_OK; // Set for later checks
   } else {
       fres = FR_NOT_READY;
+  }
+  char config_buffer[MODEM_BUFFER_SIZE];
+  if (Modem_DownloadConfig(config_buffer, sizeof(config_buffer)) == HAL_OK) {
+      printf("[CONFIG] Remote configuration downloaded.\r\n");
+      Apply_Remote_Config(config_buffer);
+  } else {
+      printf("[CONFIG] Remote configuration not applied.\r\n");
   }
   
   /* 

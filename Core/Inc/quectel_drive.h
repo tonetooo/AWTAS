@@ -26,5 +26,6 @@ void Modem_PowerOff(void);
 HAL_StatusTypeDef Modem_SendAT(char* command, char* expected_reply, uint32_t timeout);
 HAL_StatusTypeDef Modem_CheckConnection(void);
 HAL_StatusTypeDef Modem_UploadFile(const char* filename);
+HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size);
 
 #endif /* __QUECTEL_DRIVE_H */

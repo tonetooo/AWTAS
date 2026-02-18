@@ -6,7 +6,7 @@
 
 // Endpoint HTTP/HTTPS propio que recibe el CSV y lo sube a Drive
 // Ejemplo: "https://tu-servicio.run.app/upload"
-#define BACKEND_UPLOAD_URL  "https://classifieds-preference-travel-bee.trycloudflare.com/upload"
+#define BACKEND_UPLOAD_URL  "https://initially-kills-literary-liberal.trycloudflare.com"
 
 // API key o token sencillo para autenticar el dispositivo frente al backend
 #define BACKEND_API_KEY     "LIND2026ANTONIO"

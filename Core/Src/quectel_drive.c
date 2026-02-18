@@ -380,3 +380,92 @@ HAL_StatusTypeDef Modem_UploadFile(const char* filename) {
     Modem_PowerOff();
     return HAL_ERROR;
 }
+
+HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
+    if (BACKEND_UPLOAD_URL[0] == 0) {
+        printf("[MODEM] BACKEND_UPLOAD_URL no configurado.\r\n");
+        return HAL_ERROR;
+    }
+    if (out_buffer == NULL || out_size == 0) {
+        return HAL_ERROR;
+    }
+    if (Modem_BringUpNetwork() != HAL_OK) {
+        Modem_PowerOff();
+        return HAL_ERROR;
+    }
+    Modem_SendAT("AT+QHTTPCFG=\"contextid\",1", "OK", 1000);
+    Modem_SendAT("AT+QHTTPCFG=\"requestheader\",0", "OK", 1000);
+    Modem_SendAT("AT+QHTTPCFG=\"responseheader\",0", "OK", 1000);
+    Modem_SendAT("AT+QSSLCFG=\"sslversion\",1,4", "OK", 1000);
+    Modem_SendAT("AT+QSSLCFG=\"seclevel\",1,0", "OK", 1000);
+    Modem_SendAT("AT+QHTTPCFG=\"sslctxid\",1", "OK", 1000);
+    char base[256];
+    memset(base, 0, sizeof(base));
+    strncpy(base, BACKEND_UPLOAD_URL, sizeof(base) - 1);
+    char* slash = strrchr(base, '/');
+    if (slash != NULL) {
+        slash[1] = 0;
+        strncat(base, "config", sizeof(base) - strlen(base) - 1);
+    } else {
+        strncat(base, "/config", sizeof(base) - strlen(base) - 1);
+    }
+    char url[256];
+    if (BACKEND_API_KEY[0] != 0) {
+        snprintf(url, sizeof(url), "%s?name=AWTAS_CONFIG.TXT&key=%s", base, BACKEND_API_KEY);
+    } else {
+        snprintf(url, sizeof(url), "%s?name=AWTAS_CONFIG.TXT", base);
+    }
+    printf("[MODEM] CFG URL: %s\r\n", url);
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "AT+QHTTPURL=%d,30", (int)strlen(url));
+    if (Modem_SendAT(cmd, "CONNECT", 2000) != HAL_OK) {
+        Modem_PowerOff();
+        return HAL_ERROR;
+    }
+    HAL_UART_Transmit(_modem_uart, (uint8_t*)url, strlen(url), 2000);
+    Modem_SendAT("", "OK", 2000);
+    if (Modem_SendAT("AT+QHTTPGET=60", "+QHTTPGET:", 60000) != HAL_OK) {
+        Modem_PowerOff();
+        return HAL_ERROR;
+    }
+    int http_code = 0;
+    char* p = strstr(modem_rx_buffer, "+QHTTPGET:");
+    if (p != NULL) {
+        char* c1 = strchr(p, ',');
+        char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+        if (c1 != NULL && c2 != NULL) {
+            http_code = atoi(c1 + 1);
+        }
+    }
+    printf("[MODEM] CFG HTTP Status: %d\r\n", http_code);
+    if (http_code < 200 || http_code >= 300) {
+        Modem_PowerOff();
+        return HAL_ERROR;
+    }
+    if (Modem_SendAT("AT+QHTTPREAD=60", "OK", 60000) != HAL_OK) {
+        Modem_PowerOff();
+        return HAL_ERROR;
+    }
+    char* body = strstr(modem_rx_buffer, "+QHTTPREAD:");
+    if (body != NULL) {
+        char* nl = strchr(body, '\n');
+        char* cr = strchr(body, '\r');
+        char* first = nl;
+        if (first == NULL || (cr != NULL && cr < first)) {
+            first = cr;
+        }
+        if (first != NULL) {
+            body = first + 1;
+        }
+    } else {
+        body = modem_rx_buffer;
+    }
+    size_t len = strlen(body);
+    if (len >= out_size) {
+        len = out_size - 1;
+    }
+    memcpy(out_buffer, body, len);
+    out_buffer[len] = 0;
+    Modem_PowerOff();
+    return HAL_OK;
+}
