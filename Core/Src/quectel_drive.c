@@ -432,30 +432,60 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
         Modem_PowerOff();
         return HAL_ERROR;
     }
-    if (Modem_SendAT("AT+QHTTPREAD=60", "OK", 60000) != HAL_OK) {
+    const char* read_cmd = "AT+QHTTPREAD=60\r\n";
+    HAL_UART_Transmit(_modem_uart, (uint8_t*)read_cmd, strlen(read_cmd), 1000);
+    Modem_WaitFor("CONNECT", 10000);
+    char raw[MODEM_BUFFER_SIZE];
+    memset(raw, 0, sizeof(raw));
+    uint32_t last_byte_tick = HAL_GetTick();
+    uint16_t idx = 0;
+    while (1) {
+        uint8_t b;
+        if (HAL_UART_Receive(_modem_uart, &b, 1, 50) == HAL_OK) {
+            if (idx < sizeof(raw) - 1) {
+                raw[idx++] = (char)b;
+                raw[idx] = 0;
+            }
+            last_byte_tick = HAL_GetTick();
+            if (idx >= 4) {
+                if (strstr(&raw[idx >= 6 ? idx - 6 : 0], "\r\nOK\r\n") != NULL ||
+                    strstr(raw, "\r\nOK\r\n") != NULL) {
+                    break;
+                }
+            }
+        } else {
+            if (HAL_GetTick() - last_byte_tick > 2000) {
+                break;
+            }
+        }
+        if (HAL_GetTick() - last_byte_tick > 60000) {
+            break;
+        }
+    }
+    char* body = raw;
+    char* after_hdr = strstr(raw, "\n");
+    char* after_hdr_cr = strstr(raw, "\r");
+    if (after_hdr || after_hdr_cr) {
+        char* first = after_hdr;
+        if (first == NULL || (after_hdr_cr && after_hdr_cr < first)) first = after_hdr_cr;
+        if (first) body = first + 1;
+    }
+    char* okpos = strstr(body, "\r\nOK\r\n");
+    size_t body_len = okpos ? (size_t)(okpos - body) : strlen(body);
+    if (body_len >= out_size) body_len = out_size - 1;
+    size_t w = 0;
+    for (size_t i = 0; i < body_len && w < out_size - 1; i++) {
+        unsigned char c = (unsigned char)body[i];
+        if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
+            out_buffer[w++] = (char)c;
+        }
+    }
+    out_buffer[w] = 0;
+    printf("[MODEM] CFG bytes: %lu\r\n", (unsigned long)w);
+    if (w == 0) {
         Modem_PowerOff();
         return HAL_ERROR;
     }
-    char* body = strstr(modem_rx_buffer, "+QHTTPREAD:");
-    if (body != NULL) {
-        char* nl = strchr(body, '\n');
-        char* cr = strchr(body, '\r');
-        char* first = nl;
-        if (first == NULL || (cr != NULL && cr < first)) {
-            first = cr;
-        }
-        if (first != NULL) {
-            body = first + 1;
-        }
-    } else {
-        body = modem_rx_buffer;
-    }
-    size_t len = strlen(body);
-    if (len >= out_size) {
-        len = out_size - 1;
-    }
-    memcpy(out_buffer, body, len);
-    out_buffer[len] = 0;
     Modem_PowerOff();
     return HAL_OK;
 }
