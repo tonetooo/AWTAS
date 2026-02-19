@@ -53,6 +53,8 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+extern volatile uint8_t g_event_pending;
+extern volatile uint8_t g_modem_abort_enabled;
 
 /* USER CODE END EFP */
 

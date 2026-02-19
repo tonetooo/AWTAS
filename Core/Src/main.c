@@ -65,6 +65,9 @@ int cur_odr_idx = 6;
 float trigger_g = 0.5f;
 uint8_t hpf_enabled = 0;
 uint8_t act_count = 5;
+uint8_t operation_mode = 2;
+volatile uint8_t g_event_pending = 0;
+volatile uint8_t g_modem_abort_enabled = 0;
 
 // Placeholder variables for future power measurement peripheral
 float voltage_val = 0.0f;
@@ -81,6 +84,7 @@ static void MX_SPI2_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void Print_Menu(void);
+static void Run_Auto_Mode(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -90,6 +94,13 @@ typedef enum {
     PWR_STATE_LOW_POWER_WAITING,
     PWR_STATE_ACTIVE_RECORDING
 } PowerState_t;
+
+typedef enum {
+    AUTO_STATE_IDLE_LOW_POWER,
+    AUTO_STATE_ACQUISITION,
+    AUTO_STATE_UPLOAD_PENDING,
+    AUTO_STATE_CONFIG_CHECK
+} AutoState_t;
 
 void Print_Power_State(PowerState_t state) {
     printf("\r\n[POWER STATE: ");
@@ -112,6 +123,116 @@ void Print_Menu(void) {
     printf("[SENSOR] t: Set Trigger (Current: %.2f G)\r\n", trigger_g);
     printf("[SENSOR] i: Interrupt Mode (Wake-on-Motion)\r\n");
     printf("[SENSOR] q: Stop/Back\r\n");
+}
+
+static int Queue_Append(const char* name) {
+    FIL qf;
+    FRESULT res = f_open(&qf, "QUEUE.TXT", FA_OPEN_APPEND | FA_WRITE);
+    if (res != FR_OK) {
+        res = f_open(&qf, "QUEUE.TXT", FA_CREATE_ALWAYS | FA_WRITE);
+        if (res != FR_OK) {
+            return -1;
+        }
+    }
+    char line[40];
+    size_t len = strlen(name);
+    if (len > sizeof(line) - 3) {
+        len = sizeof(line) - 3;
+    }
+    memcpy(line, name, len);
+    line[len++] = '\r';
+    line[len++] = '\n';
+    UINT bw = 0;
+    res = f_write(&qf, line, len, &bw);
+    f_close(&qf);
+    if (res != FR_OK || bw != len) {
+        return -1;
+    }
+    return 0;
+}
+
+static int Queue_Peek(char* name, size_t name_size) {
+    FIL qf;
+    FRESULT res = f_open(&qf, "QUEUE.TXT", FA_READ);
+    if (res != FR_OK) {
+        return -1;
+    }
+    char line[40];
+    while (f_gets(line, sizeof(line), &qf)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        if (*p == 0 || *p == '#') {
+            continue;
+        }
+        char* end = p;
+        while (*end && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        size_t len = (size_t)(end - p);
+        if (len >= name_size) {
+            len = name_size - 1;
+        }
+        memcpy(name, p, len);
+        name[len] = 0;
+        f_close(&qf);
+        return 0;
+    }
+    f_close(&qf);
+    return -1;
+}
+
+static int Queue_Pop(char* name, size_t name_size) {
+    FIL qf;
+    FRESULT res = f_open(&qf, "QUEUE.TXT", FA_READ);
+    if (res != FR_OK) {
+        return -1;
+    }
+    FIL tmp;
+    res = f_open(&tmp, "QUEUE_TMP.TXT", FA_CREATE_ALWAYS | FA_WRITE);
+    if (res != FR_OK) {
+        f_close(&qf);
+        return -1;
+    }
+    char line[40];
+    int found = 0;
+    while (f_gets(line, sizeof(line), &qf)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        if (!found && *p != 0 && *p != '#') {
+            char* end = p;
+            while (*end && *end != '\r' && *end != '\n') {
+                end++;
+            }
+            size_t len = (size_t)(end - p);
+            if (len >= name_size) {
+                len = name_size - 1;
+            }
+            memcpy(name, p, len);
+            name[len] = 0;
+            found = 1;
+            continue;
+        }
+        UINT bw = 0;
+        res = f_write(&tmp, line, strlen(line), &bw);
+        if (res != FR_OK) {
+            f_close(&qf);
+            f_close(&tmp);
+            return -1;
+        }
+    }
+    f_close(&qf);
+    f_close(&tmp);
+    if (!found) {
+        f_unlink("QUEUE_TMP.TXT");
+        return -1;
+    }
+    f_unlink("QUEUE.TXT");
+    f_rename("QUEUE_TMP.TXT", "QUEUE.TXT");
+    return 0;
 }
 
 static void Apply_Remote_Config(const char* cfg) {
@@ -262,6 +383,16 @@ static void Apply_Remote_Config(const char* cfg) {
                 if (c > 255) c = 255;
                 act_count = (uint8_t)c;
                 printf("[CONFIG] ACT_COUNT set to %d\r\n", c);
+            } else if (len >= 15 && strncmp(line, "OPERATION_MODE=", 15) == 0) {
+                const char* val = line + 15;
+                while (*val == ' ' || *val == '\t') {
+                    val++;
+                }
+                int m = atoi(val);
+                if (m == 1 || m == 2) {
+                    operation_mode = (uint8_t)m;
+                    printf("[CONFIG] OPERATION_MODE=%d\r\n", m);
+                }
             }
         }
         if (*line_end == 0) {
@@ -272,93 +403,112 @@ static void Apply_Remote_Config(const char* cfg) {
         }
         line = line_end + 1;
     }
+    const char* mode_pos = strstr(cfg, "OPERATION_MODE=");
+    if (mode_pos != NULL) {
+        mode_pos += 15;
+        while (*mode_pos == ' ' || *mode_pos == '\t') {
+            mode_pos++;
+        }
+        int m = atoi(mode_pos);
+        if (m == 1 || m == 2) {
+            operation_mode = (uint8_t)m;
+            printf("[CONFIG] OPERATION_MODE (fallback)=%d\r\n", m);
+        }
+    }
 }
-/* USER CODE END 0 */
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
+static void Run_Auto_Mode(void) {
+    AutoState_t state = AUTO_STATE_IDLE_LOW_POWER;
+    uint32_t last_cfg = HAL_GetTick();
+    char filename[20];
+    char buffer[256];
+    unsigned int bytes_written;
+    printf("[AUTO] Entrando en modo autonomo (FSM)\r\n");
+    while (1) {
+        switch (state) {
+            case AUTO_STATE_IDLE_LOW_POWER: {
+                if (g_event_pending || HAL_GPIO_ReadPin(ADXL_INT1_GPIO_Port, ADXL_INT1_Pin) == GPIO_PIN_SET) {
+                    g_event_pending = 0;
+                    state = AUTO_STATE_ACQUISITION;
+                } else {
+                    if (HAL_GetTick() - last_cfg > 1200000) {
+                        state = AUTO_STATE_CONFIG_CHECK;
+                    } else {
+                        HAL_Delay(50);
+                    }
+                }
+            } break;
+            case AUTO_STATE_ACQUISITION: {
+                for (int i = 1; i < 999; i++) {
+                    sprintf(filename, "TRIG_%03d.CSV", i);
+                    if (f_open(&fil, filename, FA_READ) != FR_OK) { break; }
+                    f_close(&fil);
+                }
+                if (f_open(&fil, filename, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
+                    sprintf(buffer, "timestamp_rel_s;timestamp_abs;unix_time;x_g;y_g;z_g;voltaje;corriente;potencia\r\n");
+                    f_write(&fil, buffer, strlen(buffer), &bytes_written);
+                    uint32_t start_tick = HAL_GetTick();
+                    for (int n = 0; n < 200; n++) {
+                        ADXL355_Data_t d;
+                        ADXL355_Read_Data(&d);
+                        uint32_t current_tick = HAL_GetTick();
+                        uint32_t elapsed_ms = current_tick - start_tick;
+                        uint32_t base_sec = 1767817653;
+                        uint32_t rel_sec = elapsed_ms / 1000;
+                        uint32_t rel_us = (elapsed_ms % 1000) * 1000;
+                        int32_t x_ug = (int32_t)(d.x_g * 1000000);
+                        int32_t y_ug = (int32_t)(d.y_g * 1000000);
+                        int32_t z_ug = (int32_t)(d.z_g * 1000000);
+                        sprintf(buffer, "%lu.%06lu;%lu.%06lu;%lu.%06lu;%ld.%06ld;%ld.%06ld;%ld.%06ld;%.2f;%.2f;%.2f\r\n",
+                                rel_sec, rel_us, base_sec + rel_sec, rel_us, base_sec + rel_sec, rel_us,
+                                x_ug/1000000, (x_ug<0?-x_ug:x_ug)%1000000,
+                                y_ug/1000000, (y_ug<0?-y_ug:y_ug)%1000000,
+                                z_ug/1000000, (z_ug<0?-z_ug:z_ug)%1000000,
+                                voltage_val, current_val, power_val);
+                        f_write(&fil, buffer, strlen(buffer), &bytes_written);
+                        HAL_Delay(10);
+                    }
+                    f_close(&fil);
+                    Queue_Append(filename);
+                }
+                state = AUTO_STATE_UPLOAD_PENDING;
+            } break;
+            case AUTO_STATE_UPLOAD_PENDING: {
+                char oldest[40];
+                if (Queue_Peek(oldest, sizeof(oldest)) == 0) {
+                    g_modem_abort_enabled = 1;
+                    if (Modem_UploadFile(oldest) == HAL_OK) {
+                        char tmp[40];
+                        Queue_Pop(tmp, sizeof(tmp));
+                    }
+                }
+                state = AUTO_STATE_IDLE_LOW_POWER;
+            } break;
+            case AUTO_STATE_CONFIG_CHECK: {
+                g_modem_abort_enabled = 1;
+                char cfg[MODEM_BUFFER_SIZE];
+                if (Modem_DownloadConfig(cfg, sizeof(cfg)) == HAL_OK) {
+                    Apply_Remote_Config(cfg);
+                }
+                last_cfg = HAL_GetTick();
+                state = AUTO_STATE_IDLE_LOW_POWER;
+            } break;
+        }
+    }
+}
 
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_SPI1_Init();
-  MX_USART2_UART_Init();
-  MX_SPI2_Init();
-  MX_USART1_UART_Init();
-  /* USER CODE BEGIN 2 */
-  Modem_Init(&huart1);
-  printf("\r\n--- AWTAS INITIALIZING (AUTONOMOUS WIRELESS TRIAXIAL ADQUISITION SYSTEM) ---\r\n");
-  Modem_PowerOn();
-  if (ADXL355_Init(&hspi2)) {
-      printf("[SENSOR] ADXL355 Initialized Successfully\r\n");
-  } else {
-      printf("[SENSOR] ADXL355 Initialization Failed\r\n");
-  }
-
-  // Mount SD Card
-  if (sd_mount() == 0) {
-      fres = FR_OK; // Set for later checks
-  } else {
-      fres = FR_NOT_READY;
-  }
-  char config_buffer[MODEM_BUFFER_SIZE];
-  if (Modem_DownloadConfig(config_buffer, sizeof(config_buffer)) == HAL_OK) {
-      printf("[CONFIG] Remote configuration downloaded.\r\n");
-      Apply_Remote_Config(config_buffer);
-  } else {
-      printf("[CONFIG] Remote configuration not applied.\r\n");
-  }
-  
-  /* 
-  // Old Manual Mount
-  fres = f_mount(&fs, "", 1);
-  if (fres == FR_OK) {
-      printf("SD Card Mounted Successfully\r\n");
-  } else {
-      printf("SD Card Mount Failed: %d\r\n", fres);
-  }
-  */
-  
-  Print_Menu();
-  /* USER CODE END 2 */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  ADXL355_Data_t data;
-  uint8_t rx_byte = 0;
-  uint8_t monitoring = 0;
-  uint8_t logging = 0;
-  char filename[20];
-  char buffer[256];
-  unsigned int bytes_written;
-  uint32_t start_tick;
-  uint32_t read_index = 0;
-  
-  while (1)
-  {
+static void Run_Manual_Mode(void) {
+    ADXL355_Data_t data;
+    uint8_t rx_byte = 0;
+    uint8_t monitoring = 0;
+    uint8_t logging = 0;
+    char filename[20];
+    char buffer[256];
+    unsigned int bytes_written;
+    uint32_t start_tick;
+    uint32_t read_index = 0;
+    while (1)
+    {
       // Check UART input (Non-blocking)
       if (HAL_UART_Receive(&huart2, &rx_byte, 1, 0) == HAL_OK) {
           switch(rx_byte) {
@@ -652,7 +802,7 @@ int main(void)
                                   // Preguntar por subida a Drive
                                   printf("\r\nSUBIR archivo a Google Drive? (s/n): ");
                                   uint8_t upload_choice_i = 0;
-                                  while(1) {
+                                  while(1) {//
                                       if (HAL_UART_Receive(&huart2, &upload_choice_i, 1, 100) == HAL_OK) {
                                           if (upload_choice_i == 's' || upload_choice_i == 'S') {
                                               printf("Si\r\n");
@@ -711,36 +861,115 @@ int main(void)
           (void)ADXL355_Get_FIFO_Entries();
           uint32_t current_tick = HAL_GetTick();
           uint32_t elapsed_ms = current_tick - start_tick;
-          
-          // Format for CSV: timestamp_rel_s,timestamp_abs,unix_time,x_g,y_g,z_g,voltaje,corriente,potencia
-          // Simulate timestamps using elapsed time + dummy base (from example: 1767817653)
           uint32_t base_sec = 1767817653; 
           uint32_t rel_sec = elapsed_ms / 1000;
           uint32_t rel_us = (elapsed_ms % 1000) * 1000;
-          
-          // Use integer math for 6 decimal precision (micro-g)
           int32_t x_ug = (int32_t)(data.x_g * 1000000);
           int32_t y_ug = (int32_t)(data.y_g * 1000000);
           int32_t z_ug = (int32_t)(data.z_g * 1000000);
-
           sprintf(buffer, "%lu.%06lu;%lu.%06lu;%lu.%06lu;%ld.%06ld;%ld.%06ld;%ld.%06ld;%.2f;%.2f;%.2f\r\n", 
-                 rel_sec, rel_us,                             // timestamp_rel_s
-                 base_sec + rel_sec, rel_us,                  // timestamp_abs
-                 base_sec + rel_sec, rel_us,                  // unix_time
-                 x_ug/1000000, (x_ug<0?-x_ug:x_ug)%1000000,   // x_g
-                 y_ug/1000000, (y_ug<0?-y_ug:y_ug)%1000000,   // y_g
-                 z_ug/1000000, (z_ug<0?-z_ug:z_ug)%1000000,   // z_g
-                 voltage_val, current_val, power_val);        // Placeholders for power peripheral
-          
+                 rel_sec, rel_us,
+                 base_sec + rel_sec, rel_us,
+                 base_sec + rel_sec, rel_us,
+                 x_ug/1000000, (x_ug<0?-x_ug:x_ug)%1000000,
+                 y_ug/1000000, (y_ug<0?-y_ug:y_ug)%1000000,
+                 z_ug/1000000, (z_ug<0?-z_ug:z_ug)%1000000,
+                 voltage_val, current_val, power_val);
           f_write(&fil, buffer, strlen(buffer), &bytes_written);
-          read_index++; // Increment read_index even if not logged in CSV for internal tracking
+          read_index++;
       }
-    /* USER CODE END WHILE */
+    }
+}
+/* USER CODE END 0 */
 
-    /* USER CODE BEGIN 3 */
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_SPI1_Init();
+  MX_USART2_UART_Init();
+  MX_SPI2_Init();
+  MX_USART1_UART_Init();
+  /* USER CODE BEGIN 2 */
+  Modem_Init(&huart1);
+  printf("\r\n--- AWTAS INITIALIZING (AUTONOMOUS WIRELESS TRIAXIAL ADQUISITION SYSTEM) ---\r\n");
+  Modem_PowerOn();
+  if (ADXL355_Init(&hspi2)) {
+      printf("[SENSOR] ADXL355 Initialized Successfully\r\n");
+  } else {
+      printf("[SENSOR] ADXL355 Initialization Failed\r\n");
+  }
+
+  if (sd_mount() == 0) {
+      fres = FR_OK;
+  } else {
+      fres = FR_NOT_READY;
+  }
+  char config_buffer[MODEM_BUFFER_SIZE];
+  if (Modem_DownloadConfig(config_buffer, sizeof(config_buffer)) == HAL_OK) {
+      printf("[CONFIG] Remote configuration downloaded.\r\n");
+      Apply_Remote_Config(config_buffer);
+      const char* mp = strstr(config_buffer, "OPERATION_MODE=");
+      if (mp) {
+          mp += 15;
+          while (*mp == ' ' || *mp == '\t') { mp++; }
+          int m = atoi(mp);
+          if (m == 1 || m == 2) {
+              operation_mode = (uint8_t)m;
+              printf("[CONFIG] OPERATION_MODE (post-apply)=%d\r\n", m);
+          }
+      } else {
+          printf("[CONFIG] OPERATION_MODE not present in buffer; keeping=%d\r\n", operation_mode);
+      }
+      printf("[CONFIG] OPERATION_MODE effective=%d\r\n", operation_mode);
+  } else {
+      printf("[CONFIG] Remote configuration not applied.\r\n");
+  }
+  g_modem_abort_enabled = 1;
+  if (operation_mode == 2) {
+      Run_Auto_Mode();
+  } else {
+      Print_Menu();
+      Run_Manual_Mode();
+  }
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+  }
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
-}
+
 
 /**
   * @brief System Clock Configuration
@@ -1005,6 +1234,13 @@ int _write(int file, char *ptr, int len)
 {
   HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
   return len;
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == ADXL_INT1_Pin) {
+    g_event_pending = 1;
+  }
 }
 /* USER CODE END 4 */
 

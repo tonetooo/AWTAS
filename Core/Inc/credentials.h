@@ -4,7 +4,7 @@
 #define GDRIVE_TOKEN        ""
 #define GDRIVE_FOLDER_ID    "1iulcI1atbQN6lAs-lnjq9w9npcfWOX9N"
 
-#define BACKEND_BASE_URL    "https://shareware-cast-hostels-gif.trycloudflare.com"
+#define BACKEND_BASE_URL    "https://patterns-subsidiaries-heaven-equilibrium.trycloudflare.com"
 #define BACKEND_UPLOAD_URL  BACKEND_BASE_URL "/upload"
 #define BACKEND_CONFIG_URL  BACKEND_BASE_URL "/config"
 
