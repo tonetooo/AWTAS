@@ -62,10 +62,10 @@ const char* range_str[] = {"+/- 2g", "+/- 4g", "+/- 8g"};
 const char* odr_str[] = {"?", "4000Hz", "2000Hz", "1000Hz", "500Hz", "250Hz", "125Hz", "62.5Hz", "31.25Hz"};
 int cur_range_idx = 0;
 int cur_odr_idx = 6;
-float trigger_g = 0.5f;
+float trigger_g = 0.67f;
 uint8_t hpf_enabled = 0;
 uint8_t act_count = 5;
-uint8_t operation_mode = 2;
+uint8_t operation_mode = 1;
 volatile uint8_t g_event_pending = 0;
 volatile uint8_t g_modem_abort_enabled = 0;
 
@@ -235,6 +235,47 @@ static int Queue_Pop(char* name, size_t name_size) {
     return 0;
 }
 
+static void Queue_RemoveFile(const char* name) {
+    FIL qf;
+    FRESULT res = f_open(&qf, "QUEUE.TXT", FA_READ);
+    if (res != FR_OK) {
+        return;
+    }
+    FIL tmp;
+    res = f_open(&tmp, "QUEUE_TMP.TXT", FA_CREATE_ALWAYS | FA_WRITE);
+    if (res != FR_OK) {
+        f_close(&qf);
+        return;
+    }
+    char line[40];
+    while (f_gets(line, sizeof(line), &qf)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+            p++;
+        }
+        if (*p == 0 || *p == '#') {
+            UINT bw = 0;
+            f_write(&tmp, line, strlen(line), &bw);
+            continue;
+        }
+        char* end = p;
+        while (*end && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        size_t len = (size_t)(end - p);
+        size_t name_len = strlen(name);
+        if (len == name_len && strncmp(p, name, len) == 0) {
+            continue;
+        }
+        UINT bw = 0;
+        f_write(&tmp, line, strlen(line), &bw);
+    }
+    f_close(&qf);
+    f_close(&tmp);
+    f_unlink("QUEUE.TXT");
+    f_rename("QUEUE_TMP.TXT", "QUEUE.TXT");
+}
+
 static void Apply_Remote_Config(const char* cfg) {
     const char* line = cfg;
     while (line && *line) {
@@ -383,15 +424,21 @@ static void Apply_Remote_Config(const char* cfg) {
                 if (c > 255) c = 255;
                 act_count = (uint8_t)c;
                 printf("[CONFIG] ACT_COUNT set to %d\r\n", c);
-            } else if (len >= 15 && strncmp(line, "OPERATION_MODE=", 15) == 0) {
-                const char* val = line + 15;
-                while (*val == ' ' || *val == '\t') {
-                    val++;
-                }
-                int m = atoi(val);
-                if (m == 1 || m == 2) {
-                    operation_mode = (uint8_t)m;
-                    printf("[CONFIG] OPERATION_MODE=%d\r\n", m);
+            } else {
+                const char* mpos = strstr(line, "MODE=");
+                if (mpos != NULL) {
+                    const char* val = mpos + 5;
+                    while (*val == ' ' || *val == '\t') {
+                        val++;
+                    }
+                    int m = atoi(val);
+                    if (m == 1 || m == 2) {
+                        operation_mode = (uint8_t)m;
+                        printf("[CONFIG] OPERATION_MODE=%d\r\n", m);
+                    } else {
+                        operation_mode = 2;
+                        printf("[CONFIG] OPERATION_MODE invalid, forcing=2\r\n");
+                    }
                 }
             }
         }
@@ -403,9 +450,9 @@ static void Apply_Remote_Config(const char* cfg) {
         }
         line = line_end + 1;
     }
-    const char* mode_pos = strstr(cfg, "OPERATION_MODE=");
+    const char* mode_pos = strstr(cfg, "MODE=");
     if (mode_pos != NULL) {
-        mode_pos += 15;
+        mode_pos += 5;
         while (*mode_pos == ' ' || *mode_pos == '\t') {
             mode_pos++;
         }
@@ -413,6 +460,9 @@ static void Apply_Remote_Config(const char* cfg) {
         if (m == 1 || m == 2) {
             operation_mode = (uint8_t)m;
             printf("[CONFIG] OPERATION_MODE (fallback)=%d\r\n", m);
+        } else {
+            operation_mode = 2;
+            printf("[CONFIG] OPERATION_MODE (fallback invalid), forcing=2\r\n");
         }
     }
 }
@@ -421,14 +471,18 @@ static void Run_Auto_Mode(void) {
     AutoState_t state = AUTO_STATE_IDLE_LOW_POWER;
     uint32_t last_cfg = HAL_GetTick();
     char filename[20];
+    char last_recorded[20] = {0};
     char buffer[256];
     unsigned int bytes_written;
     printf("[AUTO] Entrando en modo autonomo (FSM)\r\n");
+    ADXL355_Config_WakeOnMotion(trigger_g, act_count);
+    printf("[AUTO] Wake-on-motion armado (%.2f G, count=%d)\r\n", trigger_g, act_count);
     while (1) {
         switch (state) {
             case AUTO_STATE_IDLE_LOW_POWER: {
                 if (g_event_pending || HAL_GPIO_ReadPin(ADXL_INT1_GPIO_Port, ADXL_INT1_Pin) == GPIO_PIN_SET) {
                     g_event_pending = 0;
+                    printf("[AUTO] Trigger detectado, iniciando adquisicion\r\n");
                     state = AUTO_STATE_ACQUISITION;
                 } else {
                     if (HAL_GetTick() - last_cfg > 1200000) {
@@ -448,9 +502,54 @@ static void Run_Auto_Mode(void) {
                     sprintf(buffer, "timestamp_rel_s;timestamp_abs;unix_time;x_g;y_g;z_g;voltaje;corriente;potencia\r\n");
                     f_write(&fil, buffer, strlen(buffer), &bytes_written);
                     uint32_t start_tick = HAL_GetTick();
-                    for (int n = 0; n < 200; n++) {
+                    uint32_t rec_start = HAL_GetTick();
+                    uint32_t read_index = 0;
+                    uint8_t earthquake_detected = 0;
+                    uint32_t settling_start = 0;
+                    uint8_t in_settling = 0;
+                    float prev_mag = -1.0f;
+                    const float static_delta = 0.005f;
+                    const uint32_t settling_duration = 3000;
+                    uint32_t last_print = HAL_GetTick();
+                    while ((HAL_GetTick() - rec_start) < 60000) {
                         ADXL355_Data_t d;
                         ADXL355_Read_Data(&d);
+
+                        float current_mag = sqrtf(d.x_g * d.x_g + d.y_g * d.y_g);
+
+                        if (current_mag < trigger_g) {
+                            if (!in_settling) {
+                                in_settling = 1;
+                                settling_start = HAL_GetTick();
+                                printf("\r\n[AUTO] SETTLING: Starting settling counter (%lu ms)...\r\n", (unsigned long)settling_duration);
+                            }
+                            float delta = (prev_mag < 0) ? 0.0f : fabsf(current_mag - prev_mag);
+                            if (delta > static_delta) {
+                                if ((HAL_GetTick() - settling_start) > 500) {
+                                    printf("[AUTO] Moving... resetting settling time.\r\n");
+                                }
+                                settling_start = HAL_GetTick();
+                            }
+                            if ((HAL_GetTick() - settling_start) > settling_duration) {
+                                printf("\r\n[AUTO] EVENT FINISHED: System settled.\r\n");
+                                break;
+                            }
+                        } else {
+                            if (in_settling) {
+                                printf("\r\n[AUTO] NEW EVENT DETECTED: Interrupting settling, continuing log...\r\n");
+                            }
+                            in_settling = 0;
+                        }
+                        prev_mag = current_mag;
+
+                        if ((d.x_g > 2.0f || d.x_g < -2.0f) ||
+                            (d.y_g > 2.0f || d.y_g < -2.0f) ||
+                            (d.z_g > 2.0f || d.z_g < -2.0f)) {
+                            printf("\r\n[AUTO] EARTHQUAKE/SHOCK DETECTED (>2.0G)! Aborting...\r\n");
+                            earthquake_detected = 1;
+                            break;
+                        }
+                        (void)ADXL355_Get_FIFO_Entries();
                         uint32_t current_tick = HAL_GetTick();
                         uint32_t elapsed_ms = current_tick - start_tick;
                         uint32_t base_sec = 1767817653;
@@ -466,22 +565,79 @@ static void Run_Auto_Mode(void) {
                                 z_ug/1000000, (z_ug<0?-z_ug:z_ug)%1000000,
                                 voltage_val, current_val, power_val);
                         f_write(&fil, buffer, strlen(buffer), &bytes_written);
+                        read_index++;
+                        if (HAL_GetTick() - last_print >= 125) {
+                            int32_t x_mg = (int32_t)(d.x_g * 1000);
+                            int32_t y_mg = (int32_t)(d.y_g * 1000);
+                            int32_t z_mg = (int32_t)(d.z_g * 1000);
+                            printf("[AUTO] X:%ld.%03ld Y:%ld.%03ld Z:%ld.%03ld g\r\n",
+                                   x_mg/1000, (x_mg<0?-x_mg:x_mg)%1000,
+                                   y_mg/1000, (y_mg<0?-y_mg:y_mg)%1000,
+                                   z_mg/1000, (z_mg<0?-z_mg:z_mg)%1000);
+                            last_print = HAL_GetTick();
+                        }
                         HAL_Delay(10);
                     }
                     f_close(&fil);
-                    Queue_Append(filename);
+                    if (!earthquake_detected) {
+                        Queue_Append(filename);
+                        strncpy(last_recorded, filename, sizeof(last_recorded));
+                        last_recorded[sizeof(last_recorded) - 1] = '\0';
+                    }
                 }
                 state = AUTO_STATE_UPLOAD_PENDING;
             } break;
             case AUTO_STATE_UPLOAD_PENDING: {
+                HAL_StatusTypeDef st = HAL_ERROR;
                 char oldest[40];
+                uint8_t uploaded_pending = 0;
+
                 if (Queue_Peek(oldest, sizeof(oldest)) == 0) {
-                    g_modem_abort_enabled = 1;
-                    if (Modem_UploadFile(oldest) == HAL_OK) {
-                        char tmp[40];
-                        Queue_Pop(tmp, sizeof(tmp));
+                    int is_actual = (last_recorded[0] != 0 && strcmp(oldest, last_recorded) == 0);
+                    const char* tag = is_actual ? "[ACTUAL]" : "[PENDIENTE]";
+                    for (int attempt = 1; attempt <= 3; attempt++) {
+                        printf("[AUTO] Subiendo %s (intento %d/3) %s\r\n", tag, attempt, oldest);
+                        uint8_t prev_abort = g_modem_abort_enabled;
+                        g_modem_abort_enabled = 0;
+                        g_event_pending = 0;
+                        st = Modem_UploadFile(oldest);
+                        g_modem_abort_enabled = prev_abort;
+                        if (st == HAL_OK) {
+                            char tmp[40];
+                            Queue_Pop(tmp, sizeof(tmp));
+                            Queue_RemoveFile(oldest);
+                            printf("[QUEUE] Removido de cola: %s\r\n", oldest);
+                            if (!is_actual) {
+                                uploaded_pending = 1;
+                            }
+                            break;
+                        }
                     }
                 }
+
+                if (st == HAL_OK && uploaded_pending) {
+                    char next[40];
+                    if (Queue_Peek(next, sizeof(next)) == 0) {
+                        int is_actual_next = (last_recorded[0] != 0 && strcmp(next, last_recorded) == 0);
+                        const char* tag2 = is_actual_next ? "[ACTUAL]" : "[PENDIENTE]";
+                        printf("[AUTO] Subiendo %s %s\r\n", tag2, next);
+                        uint8_t prev_abort2 = g_modem_abort_enabled;
+                        g_modem_abort_enabled = 0;
+                        g_event_pending = 0;
+                        HAL_StatusTypeDef st2 = Modem_UploadFile(next);
+                        g_modem_abort_enabled = prev_abort2;
+                        if (st2 == HAL_OK) {
+                            char tmp2[40];
+                            Queue_Pop(tmp2, sizeof(tmp2));
+                            Queue_RemoveFile(next);
+                            printf("[QUEUE] Removido de cola: %s\r\n", next);
+                        }
+                        st = st2;
+                    }
+                }
+
+                ADXL355_Config_WakeOnMotion(trigger_g, act_count);
+                printf("[AUTO] Subida terminada (status=%ld), rearmando wake-on-motion\r\n", (long)st);
                 state = AUTO_STATE_IDLE_LOW_POWER;
             } break;
             case AUTO_STATE_CONFIG_CHECK: {
@@ -562,7 +718,13 @@ static void Run_Manual_Mode(void) {
                           if (HAL_UART_Receive(&huart2, &upload_choice, 1, 100) == HAL_OK) {
                               if (upload_choice == 's' || upload_choice == 'S') {
                                   printf("Si\r\n");
+                                  uint8_t prev_abort = g_modem_abort_enabled;
+                                  uint8_t prev_event = g_event_pending;
+                                  g_modem_abort_enabled = 0;
+                                  g_event_pending = 0;
                                   Modem_UploadFile(filename);
+                                  g_modem_abort_enabled = prev_abort;
+                                  g_event_pending = prev_event;
                                   break;
                               } else if (upload_choice == 'n' || upload_choice == 'N') {
                                   printf("No\r\n");
@@ -806,7 +968,13 @@ static void Run_Manual_Mode(void) {
                                       if (HAL_UART_Receive(&huart2, &upload_choice_i, 1, 100) == HAL_OK) {
                                           if (upload_choice_i == 's' || upload_choice_i == 'S') {
                                               printf("Si\r\n");
+                                              uint8_t prev_abort_i = g_modem_abort_enabled;
+                                              uint8_t prev_event_i = g_event_pending;
+                                              g_modem_abort_enabled = 0;
+                                              g_event_pending = 0;
                                               Modem_UploadFile(filename);
+                                              g_modem_abort_enabled = prev_abort_i;
+                                              g_event_pending = prev_event_i;
                                               break;
                                           } else if (upload_choice_i == 'n' || upload_choice_i == 'N') {
                                               printf("No\r\n");
@@ -933,15 +1101,19 @@ int main(void)
   char config_buffer[MODEM_BUFFER_SIZE];
   if (Modem_DownloadConfig(config_buffer, sizeof(config_buffer)) == HAL_OK) {
       printf("[CONFIG] Remote configuration downloaded.\r\n");
+      printf("[CONFIG] Buffer recibido (inicio):\r\n%s\r\n", config_buffer);
       Apply_Remote_Config(config_buffer);
-      const char* mp = strstr(config_buffer, "OPERATION_MODE=");
+      const char* mp = strstr(config_buffer, "MODE=");
       if (mp) {
-          mp += 15;
+          mp += 5;
           while (*mp == ' ' || *mp == '\t') { mp++; }
           int m = atoi(mp);
           if (m == 1 || m == 2) {
               operation_mode = (uint8_t)m;
               printf("[CONFIG] OPERATION_MODE (post-apply)=%d\r\n", m);
+          } else {
+              operation_mode = 2;
+              printf("[CONFIG] OPERATION_MODE (post-apply invalid), forcing=2\r\n");
           }
       } else {
           printf("[CONFIG] OPERATION_MODE not present in buffer; keeping=%d\r\n", operation_mode);

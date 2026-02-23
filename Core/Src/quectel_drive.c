@@ -362,15 +362,45 @@ HAL_StatusTypeDef Modem_UploadFile(const char* filename) {
             Modem_PowerOff();
             return HAL_ERROR;
         }
-        int http_code = 0;
+        uint32_t more_start = HAL_GetTick();
+        uint16_t idx = strlen(modem_rx_buffer);
+        while ((HAL_GetTick() - more_start) < 2000 && idx < MODEM_BUFFER_SIZE - 1) {
+            uint8_t b;
+            if (HAL_UART_Receive(_modem_uart, &b, 1, 50) == HAL_OK) {
+                modem_rx_buffer[idx++] = b;
+                modem_rx_buffer[idx] = '\0';
+                if (b == '\n') {
+                    break;
+                }
+            }
+        }
+        printf("[MODEM] RAW QHTTPPOST: %s\r\n", modem_rx_buffer);
+        int http_result = -1;
+        int http_status = 0;
         char* p = strstr(modem_rx_buffer, "+QHTTPPOST:");
         if (p) {
+            p += strlen("+QHTTPPOST:");
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
             char* c1 = strchr(p, ',');
             char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
-            if (c1 && c2) { http_code = atoi(c1 + 1); }
+            if (c1) {
+                http_result = atoi(p);
+                if (c2) {
+                    http_status = atoi(c1 + 1);
+                } else {
+                    http_status = atoi(c1 + 1);
+                }
+            }
         }
-        if (http_code < 200 || http_code >= 300) {
-            printf("[MODEM] HTTP Status: %d\r\n", http_code);
+        printf("[MODEM] HTTP Result: %d, Status: %d\r\n", http_result, http_status);
+        if (http_result != 0) {
+            Modem_PowerOff();
+            return HAL_ERROR;
+        }
+        if (http_status != 0 && (http_status < 200 || http_status >= 300)) {
+            printf("[MODEM] HTTP Status fuera de rango: %d\r\n", http_status);
             Modem_PowerOff();
             return HAL_ERROR;
         }
@@ -465,29 +495,23 @@ HAL_StatusTypeDef Modem_DownloadConfig(char* out_buffer, uint16_t out_size) {
             break;
         }
     }
-    const char* keylist[] = {"RANGE=", "ODR_HZ=", "TRIGGER_G=", "HPF=", "ACT_COUNT=", "OPERATION_MODE="};
-    size_t w = 0;
+    const char* keylist[] = {"RANGE=", "ODR_HZ=", "TRIGGER_G=", "HPF=", "ACT_COUNT=", "MODE="};
+    const char* start = strstr(raw, "RANGE=");
+    if (!start) {
+        start = raw;
+    }
     int keys = 0;
     for (int i = 0; i < 6; i++) {
-        const char* k = keylist[i];
-        char* pos = strstr(raw, k);
-        if (!pos) continue;
-        const char* e1 = strstr(pos, "\r\n");
-        const char* e2 = strstr(pos, "\n");
-        const char* e3 = strstr(pos, "\r");
-        const char* end = NULL;
-        end = e1;
-        if (!end || (e2 && e2 < end)) end = e2;
-        if (!end || (e3 && e3 < end)) end = e3;
-        size_t len = end ? (size_t)(end - pos) : strlen(pos);
-        for (size_t j = 0; j < len && w < out_size - 2; j++) {
-            unsigned char c = (unsigned char)pos[j];
-            if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
-                out_buffer[w++] = (char)c;
-            }
+        if (strstr(start, keylist[i]) != NULL) {
+            keys++;
         }
-        if (w < out_size - 1) out_buffer[w++] = '\n';
-        keys++;
+    }
+    size_t w = 0;
+    for (const char* p2 = start; *p2 && w < out_size - 1; p2++) {
+        unsigned char c = (unsigned char)*p2;
+        if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
+            out_buffer[w++] = (char)c;
+        }
     }
     if (w >= out_size) w = out_size - 1;
     out_buffer[w] = 0;
