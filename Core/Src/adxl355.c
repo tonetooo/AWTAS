@@ -6,6 +6,11 @@
 static SPI_HandleTypeDef *adxl_hspi;
 static ADXL355_Range_t current_range = ADXL355_RANGE_2G;
 static float current_sensitivity = 256000.0f; // Default for 2g (approx)
+static float adxl_offset_x_g = 0.0f;
+static float adxl_offset_y_g = 0.0f;
+static float adxl_offset_z_g = 0.0f;
+static uint8_t adxl_offsets_valid = 0;
+static void ADXL355_Read_Data_Internal(ADXL355_Data_t *data, uint8_t apply_offsets);
 
 // Internal helpers
 void ADXL355_Write_Reg(uint8_t reg, uint8_t value) {
@@ -209,7 +214,34 @@ void ADXL355_Config_WakeOnMotion(float threshold_g, uint8_t count) {
     ADXL355_Write_Reg(ADXL355_POWER_CTL, 0x00);
 }
 
-void ADXL355_Read_Data(ADXL355_Data_t *data) {
+void ADXL355_LevelToZero(void) {
+    printf("[CAL] Iniciando level-to-zero, mantenga el sensor quieto...\r\n");
+    HAL_Delay(200);
+    const int samples = 512;
+    float sum_x = 0.0f;
+    float sum_y = 0.0f;
+    float sum_z = 0.0f;
+    ADXL355_Data_t d;
+    for (int i = 0; i < samples; i++) {
+        ADXL355_Read_Data_Internal(&d, 0);
+        sum_x += d.x_g;
+        sum_y += d.y_g;
+        sum_z += d.z_g;
+        HAL_Delay(2);
+    }
+    float avg_x = sum_x / samples;
+    float avg_y = sum_y / samples;
+    float avg_z = sum_z / samples;
+    adxl_offset_x_g = avg_x;
+    adxl_offset_y_g = avg_y;
+    adxl_offset_z_g = avg_z;
+    adxl_offsets_valid = 1;
+    printf("[CAL] Promedio en reposo (g): X=%.4f, Y=%.4f, Z=%.4f\r\n", avg_x, avg_y, avg_z);
+    printf("[CAL] Offsets aplicados (g): X=%.4f, Y=%.4f, Z=%.4f\r\n", adxl_offset_x_g, adxl_offset_y_g, adxl_offset_z_g);
+    printf("[CAL] Level-to-zero completado; lecturas futuras se corrigen con estos offsets.\r\n");
+}
+
+static void ADXL355_Read_Data_Internal(ADXL355_Data_t *data, uint8_t apply_offsets) {
     uint8_t tx_data = (ADXL355_XDATA3 << 1) | 0x01;
     uint8_t raw_data[9];
     
@@ -218,12 +250,10 @@ void ADXL355_Read_Data(ADXL355_Data_t *data) {
     HAL_SPI_Receive(adxl_hspi, raw_data, 9, 100);
     HAL_GPIO_WritePin(ADXL_CS_GPIO_Port, ADXL_CS_Pin, GPIO_PIN_SET);
     
-    // Convert 20-bit data to 32-bit signed integer
     int32_t x = ((int32_t)raw_data[0] << 12) | ((int32_t)raw_data[1] << 4) | ((int32_t)raw_data[2] >> 4);
     int32_t y = ((int32_t)raw_data[3] << 12) | ((int32_t)raw_data[4] << 4) | ((int32_t)raw_data[5] >> 4);
     int32_t z = ((int32_t)raw_data[6] << 12) | ((int32_t)raw_data[7] << 4) | ((int32_t)raw_data[8] >> 4);
     
-    // Sign extension for 20-bit numbers
     if (x & 0x80000) x |= 0xFFF00000;
     if (y & 0x80000) y |= 0xFFF00000;
     if (z & 0x80000) z |= 0xFFF00000;
@@ -232,12 +262,21 @@ void ADXL355_Read_Data(ADXL355_Data_t *data) {
     data->y = y;
     data->z = z;
     
-    // Calculate G values
     data->x_g = (float)x / current_sensitivity;
     data->y_g = (float)y / current_sensitivity;
     data->z_g = (float)z / current_sensitivity;
+
+    if (apply_offsets && adxl_offsets_valid) {
+        data->x_g -= adxl_offset_x_g;
+        data->y_g -= adxl_offset_y_g;
+        data->z_g -= adxl_offset_z_g;
+    }
     
     data->timestamp = HAL_GetTick();
+}
+
+void ADXL355_Read_Data(ADXL355_Data_t *data) {
+    ADXL355_Read_Data_Internal(data, 1);
 }
 
 uint8_t ADXL355_Get_FIFO_Entries(void) {

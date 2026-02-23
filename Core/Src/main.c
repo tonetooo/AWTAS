@@ -1089,6 +1089,7 @@ int main(void)
   Modem_PowerOn();
   if (ADXL355_Init(&hspi2)) {
       printf("[SENSOR] ADXL355 Initialized Successfully\r\n");
+      ADXL355_LevelToZero();
   } else {
       printf("[SENSOR] ADXL355 Initialization Failed\r\n");
   }

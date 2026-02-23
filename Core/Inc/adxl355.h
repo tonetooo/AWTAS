@@ -80,5 +80,6 @@ void ADXL355_Read_FIFO_Data(ADXL355_Data_t *data);
 void ADXL355_Set_HPF(uint8_t enable);
 void ADXL355_Read_FIFO(ADXL355_Data_t *buffer, uint8_t count);
 int ADXL355_Read_FIFO_Burst(SPI_HandleTypeDef *hspi, ADXL355_Data_t *buffer, uint8_t count);
+void ADXL355_LevelToZero(void);
 
 #endif
