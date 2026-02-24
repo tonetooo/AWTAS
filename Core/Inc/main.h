@@ -55,6 +55,7 @@ void Error_Handler(void);
 /* USER CODE BEGIN EFP */
 extern volatile uint8_t g_event_pending;
 extern volatile uint8_t g_modem_abort_enabled;
+void Apply_Remote_Config(const char* key, const char* val);
 
 /* USER CODE END EFP */
 

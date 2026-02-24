@@ -212,6 +212,11 @@ void ADXL355_Config_WakeOnMotion(float threshold_g, uint8_t count) {
 
     // 6. Return to Measurement Mode
     ADXL355_Write_Reg(ADXL355_POWER_CTL, 0x00);
+    
+    // 7. Clear any pending interrupts by reading STATUS
+    // Esto asegura que la linea INT1 baje antes de empezar a esperar
+    HAL_Delay(10);
+    ADXL355_Read_Reg(ADXL355_STATUS);
 }
 
 void ADXL355_LevelToZero(void) {

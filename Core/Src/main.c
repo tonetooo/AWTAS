@@ -62,10 +62,10 @@ const char* range_str[] = {"+/- 2g", "+/- 4g", "+/- 8g"};
 const char* odr_str[] = {"?", "4000Hz", "2000Hz", "1000Hz", "500Hz", "250Hz", "125Hz", "62.5Hz", "31.25Hz"};
 int cur_range_idx = 0;
 int cur_odr_idx = 6;
-float trigger_g = 0.67f;
+float trigger_g = 0.02f;
 uint8_t hpf_enabled = 0;
 uint8_t act_count = 5;
-uint8_t operation_mode = 1;
+uint8_t operation_mode = 2;
 volatile uint8_t g_event_pending = 0;
 volatile uint8_t g_modem_abort_enabled = 0;
 
@@ -276,193 +276,61 @@ static void Queue_RemoveFile(const char* name) {
     f_rename("QUEUE_TMP.TXT", "QUEUE.TXT");
 }
 
-static void Apply_Remote_Config(const char* cfg) {
-    const char* line = cfg;
-    while (line && *line) {
-        const char* line_end = line;
-        while (*line_end && *line_end != '\n' && *line_end != '\r') {
-            line_end++;
+void Apply_Remote_Config(const char* key, const char* val) {
+    if (strcmp(key, "RANGE") == 0) {
+        int g = atoi(val);
+        if (g <= 2) {
+            ADXL355_Set_Range(ADXL355_RANGE_2G);
+            cur_range_idx = 0;
+        } else if (g <= 4) {
+            ADXL355_Set_Range(ADXL355_RANGE_4G);
+            cur_range_idx = 1;
+        } else {
+            ADXL355_Set_Range(ADXL355_RANGE_8G);
+            cur_range_idx = 2;
         }
-        size_t len = (size_t)(line_end - line);
-        while (len > 0 && (line[0] == ' ' || line[0] == '\t')) {
-            line++;
-            len--;
+        printf("[CONFIG] RANGE set to %s\r\n", range_str[cur_range_idx]);
+    } else if (strcmp(key, "ODR_HZ") == 0) {
+        int odr = atoi(val);
+        switch (odr) {
+            case 4000: ADXL355_Set_ODR(ADXL355_ODR_4000HZ); cur_odr_idx = 1; break;
+            case 2000: ADXL355_Set_ODR(ADXL355_ODR_2000HZ); cur_odr_idx = 2; break;
+            case 1000: ADXL355_Set_ODR(ADXL355_ODR_1000HZ); cur_odr_idx = 3; break;
+            case 500:  ADXL355_Set_ODR(ADXL355_ODR_500HZ);  cur_odr_idx = 4; break;
+            case 250:  ADXL355_Set_ODR(ADXL355_ODR_250HZ);  cur_odr_idx = 5; break;
+            case 125:  ADXL355_Set_ODR(ADXL355_ODR_125HZ);  cur_odr_idx = 6; break;
+            case 62:   ADXL355_Set_ODR(ADXL355_ODR_62_5HZ); cur_odr_idx = 7; break;
+            case 31:   ADXL355_Set_ODR(ADXL355_ODR_31_25HZ); cur_odr_idx = 8; break;
+            default: break;
         }
-        if (len > 0) {
-            if (len >= 6 && strncmp(line, "RANGE=", 6) == 0) {
-                const char* val = line + 6;
-                while (*val == ' ' || *val == '\t') {
-                    val++;
-                }
-                char tmp[8];
-                size_t vlen = 0;
-                while (val[vlen] != 0 && val[vlen] != '\r' && val[vlen] != '\n' && vlen < sizeof(tmp) - 1) {
-                    tmp[vlen] = val[vlen];
-                    vlen++;
-                }
-                tmp[vlen] = 0;
-                for (size_t i = 0; i < vlen; i++) {
-                    if (tmp[i] >= 'a' && tmp[i] <= 'z') {
-                        tmp[i] = (char)(tmp[i] - 'a' + 'A');
-                    }
-                }
-                int g = 0;
-                if (tmp[0] == '2') {
-                    g = 2;
-                } else if (tmp[0] == '4') {
-                    g = 4;
-                } else if (tmp[0] == '8') {
-                    g = 8;
-                } else {
-                    g = atoi(tmp);
-                }
-                if (g <= 2) {
-                    ADXL355_Set_Range(ADXL355_RANGE_2G);
-                    cur_range_idx = 0;
-                } else if (g <= 4) {
-                    ADXL355_Set_Range(ADXL355_RANGE_4G);
-                    cur_range_idx = 1;
-                } else {
-                    ADXL355_Set_Range(ADXL355_RANGE_8G);
-                    cur_range_idx = 2;
-                }
-                printf("[CONFIG] RANGE set to %s\r\n", range_str[cur_range_idx]);
-            } else if (len >= 7 && strncmp(line, "ODR_HZ=", 7) == 0) {
-                const char* val = line + 7;
-                while (*val == ' ' || *val == '\t') {
-                    val++;
-                }
-                int odr = atoi(val);
-                switch (odr) {
-                    case 4000:
-                        ADXL355_Set_ODR(ADXL355_ODR_4000HZ);
-                        cur_odr_idx = 1;
-                        break;
-                    case 2000:
-                        ADXL355_Set_ODR(ADXL355_ODR_2000HZ);
-                        cur_odr_idx = 2;
-                        break;
-                    case 1000:
-                        ADXL355_Set_ODR(ADXL355_ODR_1000HZ);
-                        cur_odr_idx = 3;
-                        break;
-                    case 500:
-                        ADXL355_Set_ODR(ADXL355_ODR_500HZ);
-                        cur_odr_idx = 4;
-                        break;
-                    case 250:
-                        ADXL355_Set_ODR(ADXL355_ODR_250HZ);
-                        cur_odr_idx = 5;
-                        break;
-                    case 125:
-                        ADXL355_Set_ODR(ADXL355_ODR_125HZ);
-                        cur_odr_idx = 6;
-                        break;
-                    case 62:
-                        ADXL355_Set_ODR(ADXL355_ODR_62_5HZ);
-                        cur_odr_idx = 7;
-                        break;
-                    case 31:
-                        ADXL355_Set_ODR(ADXL355_ODR_31_25HZ);
-                        cur_odr_idx = 8;
-                        break;
-                    default:
-                        break;
-                }
-                if (cur_odr_idx > 0) {
-                    printf("[CONFIG] ODR set to %s\r\n", odr_str[cur_odr_idx]);
-                }
-            } else if (len >= 10 && strncmp(line, "TRIGGER_G=", 10) == 0) {
-                const char* val = line + 10;
-                while (*val == ' ' || *val == '\t') {
-                    val++;
-                }
-                float t = atof(val);
-                if (t > 0.0f) {
-                    trigger_g = t;
-                    printf("[CONFIG] Trigger set to %.2f G\r\n", trigger_g);
-                }
-            } else if (len >= 4 && strncmp(line, "HPF=", 4) == 0) {
-                const char* val = line + 4;
-                while (*val == ' ' || *val == '\t') {
-                    val++;
-                }
-                char tmp[8];
-                size_t vlen = 0;
-                while (val[vlen] != 0 && val[vlen] != '\r' && val[vlen] != '\n' && vlen < sizeof(tmp) - 1) {
-                    tmp[vlen] = val[vlen];
-                    vlen++;
-                }
-                tmp[vlen] = 0;
-                for (size_t i = 0; i < vlen; i++) {
-                    if (tmp[i] >= 'a' && tmp[i] <= 'z') {
-                        tmp[i] = (char)(tmp[i] - 'a' + 'A');
-                    }
-                }
-                uint8_t enable = 0;
-                if (tmp[0] == 'O') {
-                    if (tmp[1] == 'N') {
-                        enable = 1;
-                    } else if (tmp[1] == 'F' && tmp[2] == 'F') {
-                        enable = 0;
-                    }
-                } else if (tmp[0] == '1') {
-                    enable = 1;
-                } else if (tmp[0] == '0') {
-                    enable = 0;
-                }
-                hpf_enabled = enable;
-                ADXL355_Set_HPF(hpf_enabled);
-                printf("[CONFIG] HPF %s\r\n", hpf_enabled ? "ON" : "OFF");
-            } else if (len >= 10 && strncmp(line, "ACT_COUNT=", 10) == 0) {
-                const char* val = line + 10;
-                while (*val == ' ' || *val == '\t') {
-                    val++;
-                }
-                int c = atoi(val);
-                if (c < 1) c = 1;
-                if (c > 255) c = 255;
-                act_count = (uint8_t)c;
-                printf("[CONFIG] ACT_COUNT set to %d\r\n", c);
-            } else {
-                const char* mpos = strstr(line, "MODE=");
-                if (mpos != NULL) {
-                    const char* val = mpos + 5;
-                    while (*val == ' ' || *val == '\t') {
-                        val++;
-                    }
-                    int m = atoi(val);
-                    if (m == 1 || m == 2) {
-                        operation_mode = (uint8_t)m;
-                        printf("[CONFIG] OPERATION_MODE=%d\r\n", m);
-                    } else {
-                        operation_mode = 2;
-                        printf("[CONFIG] OPERATION_MODE invalid, forcing=2\r\n");
-                    }
-                }
-            }
+        if (cur_odr_idx > 0) printf("[CONFIG] ODR set to %s\r\n", odr_str[cur_odr_idx]);
+    } else if (strcmp(key, "TRIGGER_G") == 0) {
+        float t = atof(val);
+        if (t > 0.0f) {
+            trigger_g = t;
+            printf("[CONFIG] Trigger set to %.2f G\r\n", trigger_g);
         }
-        if (*line_end == 0) {
-            break;
-        }
-        if (*line_end == '\r' && line_end[1] == '\n') {
-            line_end++;
-        }
-        line = line_end + 1;
-    }
-    const char* mode_pos = strstr(cfg, "MODE=");
-    if (mode_pos != NULL) {
-        mode_pos += 5;
-        while (*mode_pos == ' ' || *mode_pos == '\t') {
-            mode_pos++;
-        }
-        int m = atoi(mode_pos);
+    } else if (strcmp(key, "HPF") == 0) {
+        uint8_t enable = 0;
+        if (strcasecmp(val, "ON") == 0 || strcmp(val, "1") == 0) enable = 1;
+        else if (strcasecmp(val, "OFF") == 0 || strcmp(val, "0") == 0) enable = 0;
+        hpf_enabled = enable;
+        ADXL355_Set_HPF(hpf_enabled);
+        printf("[CONFIG] HPF %s\r\n", hpf_enabled ? "ON" : "OFF");
+    } else if (strcmp(key, "ACT_COUNT") == 0) {
+        int c = atoi(val);
+        if (c < 1) c = 1;
+        if (c > 255) c = 255;
+        act_count = (uint8_t)c;
+        printf("[CONFIG] ACT_COUNT set to %d\r\n", c);
+    } else if (strcmp(key, "OPERATION_MODE") == 0 || strcmp(key, "MODE") == 0) {
+        int m = atoi(val);
         if (m == 1 || m == 2) {
             operation_mode = (uint8_t)m;
-            printf("[CONFIG] OPERATION_MODE (fallback)=%d\r\n", m);
+            printf("[CONFIG] OPERATION_MODE=%d\r\n", m);
         } else {
             operation_mode = 2;
-            printf("[CONFIG] OPERATION_MODE (fallback invalid), forcing=2\r\n");
+            printf("[CONFIG] OPERATION_MODE invalid, forcing=2\r\n");
         }
     }
 }
@@ -480,6 +348,13 @@ static void Run_Auto_Mode(void) {
     while (1) {
         switch (state) {
             case AUTO_STATE_IDLE_LOW_POWER: {
+                // Heartbeat log para indicar que el sistema esta vivo esperando
+                static uint32_t last_idle_print = 0;
+                if (HAL_GetTick() - last_idle_print > 10000) { // Cada 10s
+                     printf("[AUTO] IDLE: Sistema armado y esperando evento (%.2f G)...\r\n", trigger_g);
+                     last_idle_print = HAL_GetTick();
+                }
+
                 if (g_event_pending || HAL_GPIO_ReadPin(ADXL_INT1_GPIO_Port, ADXL_INT1_Pin) == GPIO_PIN_SET) {
                     g_event_pending = 0;
                     printf("[AUTO] Trigger detectado, iniciando adquisicion\r\n");
@@ -509,9 +384,13 @@ static void Run_Auto_Mode(void) {
                     uint8_t in_settling = 0;
                     float prev_mag = -1.0f;
                     const float static_delta = 0.005f;
-                    const uint32_t settling_duration = 3000;
+                    uint32_t settling_duration = 3000;
                     uint32_t last_print = HAL_GetTick();
-                    while ((HAL_GetTick() - rec_start) < 60000) {
+                    
+                    // TIMEOUT DINAMICO: 
+                    // Si el evento dura poco, salimos rapido. Si dura mucho, cortamos en 15 minutos (900000 ms).
+                    // Empezamos con un "hard limit" extendido, pero la logica de settling sigue siendo la clave para eventos cortos.
+                    while ((HAL_GetTick() - rec_start) < 900000) {
                         ADXL355_Data_t d;
                         ADXL355_Read_Data(&d);
 
@@ -521,22 +400,25 @@ static void Run_Auto_Mode(void) {
                             if (!in_settling) {
                                 in_settling = 1;
                                 settling_start = HAL_GetTick();
-                                printf("\r\n[AUTO] SETTLING: Starting settling counter (%lu ms)...\r\n", (unsigned long)settling_duration);
+                                printf("\r\n[AUTO] SETTLING: Silencio detectado (<%.2f G). Esperando %lu ms...\r\n", trigger_g, (unsigned long)settling_duration);
                             }
+                            
                             float delta = (prev_mag < 0) ? 0.0f : fabsf(current_mag - prev_mag);
                             if (delta > static_delta) {
                                 if ((HAL_GetTick() - settling_start) > 500) {
-                                    printf("[AUTO] Moving... resetting settling time.\r\n");
+                                    printf("[AUTO] Movimiento residual detectado. Reiniciando settling.\r\n");
                                 }
                                 settling_start = HAL_GetTick();
                             }
+                            
+                            // Si se mantiene estable por el tiempo definido, terminamos
                             if ((HAL_GetTick() - settling_start) > settling_duration) {
-                                printf("\r\n[AUTO] EVENT FINISHED: System settled.\r\n");
+                                printf("\r\n[AUTO] EVENT FINISHED: System settled (%.1f s duration).\r\n", (float)(HAL_GetTick() - rec_start)/1000.0f);
                                 break;
                             }
                         } else {
                             if (in_settling) {
-                                printf("\r\n[AUTO] NEW EVENT DETECTED: Interrupting settling, continuing log...\r\n");
+                                printf("\r\n[AUTO] NEW EVENT DETECTED: Interrupting settling...\r\n");
                             }
                             in_settling = 0;
                         }
@@ -597,11 +479,19 @@ static void Run_Auto_Mode(void) {
                     const char* tag = is_actual ? "[ACTUAL]" : "[PENDIENTE]";
                     for (int attempt = 1; attempt <= 3; attempt++) {
                         printf("[AUTO] Subiendo %s (intento %d/3) %s\r\n", tag, attempt, oldest);
+                        
+                        // Verificar interrupcion antes de iniciar
+                        if (g_event_pending) {
+                             printf("[AUTO] Interrupcion detectada antes de subida. Abortando.\r\n");
+                             st = HAL_BUSY;
+                             break;
+                        }
+
                         uint8_t prev_abort = g_modem_abort_enabled;
-                        g_modem_abort_enabled = 0;
-                        g_event_pending = 0;
+                        g_modem_abort_enabled = 1; // Permitir aborto
                         st = Modem_UploadFile(oldest);
                         g_modem_abort_enabled = prev_abort;
+                        
                         if (st == HAL_OK) {
                             char tmp[40];
                             Queue_Pop(tmp, sizeof(tmp));
@@ -611,26 +501,53 @@ static void Run_Auto_Mode(void) {
                                 uploaded_pending = 1;
                             }
                             break;
+                        } else if (g_event_pending) {
+                             // Si fallo por evento, salir del bucle de intentos
+                             break;
                         }
+                        
+                        // Esperar un poco antes de reintentar si no fue evento
+                        HAL_Delay(2000);
                     }
+                }
+                
+                if (g_event_pending) {
+                     printf("[AUTO] Salida de estado UPLOAD por evento pendiente.\r\n");
+                     state = AUTO_STATE_IDLE_LOW_POWER;
+                     // Salir del switch para procesar evento inmediatamente en siguiente iteracion
+                     break; 
                 }
 
                 if (st == HAL_OK && uploaded_pending) {
+                    // Verificar si hubo interrupcion durante la subida anterior
+                    if (g_event_pending) {
+                        printf("[AUTO] Interrupcion detectada durante subida. Abortando cola para adquirir.\r\n");
+                        state = AUTO_STATE_IDLE_LOW_POWER; // Volver a IDLE para procesar el evento
+                        break;
+                    }
+
                     char next[40];
                     if (Queue_Peek(next, sizeof(next)) == 0) {
                         int is_actual_next = (last_recorded[0] != 0 && strcmp(next, last_recorded) == 0);
                         const char* tag2 = is_actual_next ? "[ACTUAL]" : "[PENDIENTE]";
                         printf("[AUTO] Subiendo %s %s\r\n", tag2, next);
+                        
+                        // NO LIMPIAR g_event_pending AQUI. Si ocurre evento, Modem_UploadFile deberia abortar o lo detectamos despues.
                         uint8_t prev_abort2 = g_modem_abort_enabled;
-                        g_modem_abort_enabled = 0;
-                        g_event_pending = 0;
+                        g_modem_abort_enabled = 1; // Habilitar aborto por interrupcion
+                        
                         HAL_StatusTypeDef st2 = Modem_UploadFile(next);
                         g_modem_abort_enabled = prev_abort2;
+                        
                         if (st2 == HAL_OK) {
                             char tmp2[40];
                             Queue_Pop(tmp2, sizeof(tmp2));
                             Queue_RemoveFile(next);
                             printf("[QUEUE] Removido de cola: %s\r\n", next);
+                        } else if (g_event_pending) {
+                             printf("[AUTO] Subida abortada por evento.\r\n");
+                             state = AUTO_STATE_IDLE_LOW_POWER;
+                             break;
                         }
                         st = st2;
                     }
@@ -643,8 +560,9 @@ static void Run_Auto_Mode(void) {
             case AUTO_STATE_CONFIG_CHECK: {
                 g_modem_abort_enabled = 1;
                 char cfg[MODEM_BUFFER_SIZE];
+                // Modem_DownloadConfig aplica la configuracion internamente via Apply_Remote_Config
                 if (Modem_DownloadConfig(cfg, sizeof(cfg)) == HAL_OK) {
-                    Apply_Remote_Config(cfg);
+                    printf("[AUTO] Configuracion verificada y actualizada.\r\n");
                 }
                 last_cfg = HAL_GetTick();
                 state = AUTO_STATE_IDLE_LOW_POWER;
@@ -1100,28 +1018,13 @@ int main(void)
       fres = FR_NOT_READY;
   }
   char config_buffer[MODEM_BUFFER_SIZE];
+  // Modem_DownloadConfig aplica la configuracion internamente, incluyendo OPERATION_MODE
   if (Modem_DownloadConfig(config_buffer, sizeof(config_buffer)) == HAL_OK) {
-      printf("[CONFIG] Remote configuration downloaded.\r\n");
+      printf("[CONFIG] Remote configuration downloaded and applied.\r\n");
       printf("[CONFIG] Buffer recibido (inicio):\r\n%s\r\n", config_buffer);
-      Apply_Remote_Config(config_buffer);
-      const char* mp = strstr(config_buffer, "MODE=");
-      if (mp) {
-          mp += 5;
-          while (*mp == ' ' || *mp == '\t') { mp++; }
-          int m = atoi(mp);
-          if (m == 1 || m == 2) {
-              operation_mode = (uint8_t)m;
-              printf("[CONFIG] OPERATION_MODE (post-apply)=%d\r\n", m);
-          } else {
-              operation_mode = 2;
-              printf("[CONFIG] OPERATION_MODE (post-apply invalid), forcing=2\r\n");
-          }
-      } else {
-          printf("[CONFIG] OPERATION_MODE not present in buffer; keeping=%d\r\n", operation_mode);
-      }
       printf("[CONFIG] OPERATION_MODE effective=%d\r\n", operation_mode);
   } else {
-      printf("[CONFIG] Remote configuration not applied.\r\n");
+      printf("[CONFIG] Remote configuration not applied (Error or Timeout).\r\n");
   }
   g_modem_abort_enabled = 1;
   if (operation_mode == 2) {
@@ -1405,7 +1308,14 @@ static void MX_GPIO_Init(void)
 // Redirect printf to UART
 int _write(int file, char *ptr, int len)
 {
-  HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, HAL_MAX_DELAY);
+  // Usar timeout de 0 o muy bajo para evitar bloqueo si no hay receptor
+  // Si el PC no está conectado, el buffer interno del UART se llenará y
+  // HAL_UART_Transmit podría bloquearse esperando que se vacíe si el timeout es alto.
+  // Con timeout pequeño, se perderán caracteres pero el sistema seguirá corriendo.
+  HAL_StatusTypeDef status = HAL_UART_Transmit(&huart2, (uint8_t*)ptr, len, 10);
+  if (status != HAL_OK) {
+      // Opcional: Manejar error, pero lo importante es no bloquear
+  }
   return len;
 }
 
