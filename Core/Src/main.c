@@ -385,81 +385,95 @@ static void Run_Auto_Mode(void) {
                     float prev_mag = -1.0f;
                     const float static_delta = 0.005f;
                     uint32_t settling_duration = 3000;
+                    const uint32_t min_duration = 3000;
                     uint32_t last_print = HAL_GetTick();
                     
-                    // TIMEOUT DINAMICO: 
-                    // Si el evento dura poco, salimos rapido. Si dura mucho, cortamos en 15 minutos (900000 ms).
-                    // Empezamos con un "hard limit" extendido, pero la logica de settling sigue siendo la clave para eventos cortos.
-                    while ((HAL_GetTick() - rec_start) < 900000) {
-                        ADXL355_Data_t d;
-                        ADXL355_Read_Data(&d);
+                        // TIMEOUT DINAMICO: 
+                        // Si el evento dura poco, salimos rapido. Si dura mucho, cortamos en 15 minutos (900000 ms).
+                        while ((HAL_GetTick() - rec_start) < 900000) {
+                            ADXL355_Data_t d;
+                            ADXL355_Read_Data(&d);
 
-                        float current_mag = sqrtf(d.x_g * d.x_g + d.y_g * d.y_g);
+                            float current_mag = sqrtf(d.x_g * d.x_g + d.y_g * d.y_g);
 
-                        if (current_mag < trigger_g) {
-                            if (!in_settling) {
-                                in_settling = 1;
-                                settling_start = HAL_GetTick();
-                                printf("\r\n[AUTO] SETTLING: Silencio detectado (<%.2f G). Esperando %lu ms...\r\n", trigger_g, (unsigned long)settling_duration);
-                            }
-                            
-                            float delta = (prev_mag < 0) ? 0.0f : fabsf(current_mag - prev_mag);
-                            if (delta > static_delta) {
-                                if ((HAL_GetTick() - settling_start) > 500) {
-                                    printf("[AUTO] Movimiento residual detectado. Reiniciando settling.\r\n");
+                            if (current_mag < trigger_g) {
+                                if (!in_settling) {
+                                    in_settling = 1;
+                                    settling_start = HAL_GetTick();
+                                    printf("\r\n[AUTO] SETTLING: Silencio detectado (<%.2f G). Esperando %lu ms...\r\n", trigger_g, (unsigned long)settling_duration);
                                 }
-                                settling_start = HAL_GetTick();
+                                
+                                float delta = (prev_mag < 0) ? 0.0f : fabsf(current_mag - prev_mag);
+                                if (delta > static_delta) {
+                                    // if ((HAL_GetTick() - settling_start) > 500) {
+                                    //     printf("[AUTO] Movimiento residual detectado. Reiniciando settling.\r\n");
+                                    // }
+                                    // settling_start = HAL_GetTick();
+                                }
+                                
+                                // CONDICION DE SALIDA:
+                                // 1. Estamos en periodo de settling
+                                // 2. Ha pasado el tiempo de settling (3s)
+                                // 3. Y ADEMAS hemos grabado al menos el tiempo minimo (3s)
+                                if ((HAL_GetTick() - settling_start) > settling_duration) {
+                                    if ((HAL_GetTick() - rec_start) > min_duration) {
+                                        printf("\r\n[AUTO] EVENT FINISHED: System settled (%.1f s duration).\r\n", (float)(HAL_GetTick() - rec_start)/1000.0f);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                if (in_settling) {
+                                    printf("\r\n[AUTO] NEW EVENT DETECTED: Interrupting settling...\r\n");
+                                }
+                                in_settling = 0;
                             }
-                            
-                            // Si se mantiene estable por el tiempo definido, terminamos
-                            if ((HAL_GetTick() - settling_start) > settling_duration) {
-                                printf("\r\n[AUTO] EVENT FINISHED: System settled (%.1f s duration).\r\n", (float)(HAL_GetTick() - rec_start)/1000.0f);
+                            prev_mag = current_mag;
+
+                            if ((d.x_g > 2.0f || d.x_g < -2.0f) ||
+                                (d.y_g > 2.0f || d.y_g < -2.0f) ||
+                                (d.z_g > 2.0f || d.z_g < -2.0f)) {
+                                printf("\r\n[AUTO] EARTHQUAKE/SHOCK DETECTED (>2.0G)! Aborting...\r\n");
+                                earthquake_detected = 1;
                                 break;
                             }
-                        } else {
-                            if (in_settling) {
-                                printf("\r\n[AUTO] NEW EVENT DETECTED: Interrupting settling...\r\n");
+                            (void)ADXL355_Get_FIFO_Entries();
+                            uint32_t current_tick = HAL_GetTick();
+                            uint32_t elapsed_ms = current_tick - start_tick;
+                            uint32_t base_sec = 1767817653;
+                            uint32_t rel_sec = elapsed_ms / 1000;
+                            uint32_t rel_us = (elapsed_ms % 1000) * 1000;
+                            int32_t x_ug = (int32_t)(d.x_g * 1000000);
+                            int32_t y_ug = (int32_t)(d.y_g * 1000000);
+                            int32_t z_ug = (int32_t)(d.z_g * 1000000);
+                            sprintf(buffer, "%lu.%06lu;%lu.%06lu;%lu.%06lu;%ld.%06ld;%ld.%06ld;%ld.%06ld;%.2f;%.2f;%.2f\r\n",
+                                    rel_sec, rel_us, base_sec + rel_sec, rel_us, base_sec + rel_sec, rel_us,
+                                    x_ug/1000000, (x_ug<0?-x_ug:x_ug)%1000000,
+                                    y_ug/1000000, (y_ug<0?-y_ug:y_ug)%1000000,
+                                    z_ug/1000000, (z_ug<0?-z_ug:z_ug)%1000000,
+                                    voltage_val, current_val, power_val);
+                            
+                            // ESCRITURA FORZADA: Forzar volcado a disco fisico cada 100 muestras o 1 segundo
+                            // para evitar que los datos se queden en cache RAM y se pierdan si se cierra el archivo rapido.
+                            UINT bw;
+                            f_write(&fil, buffer, strlen(buffer), &bw);
+                            if (read_index % 100 == 0) {
+                                f_sync(&fil); 
                             }
-                            in_settling = 0;
+                            
+                            read_index++;
+                            if (HAL_GetTick() - last_print >= 125) {
+                                int32_t x_mg = (int32_t)(d.x_g * 1000);
+                                int32_t y_mg = (int32_t)(d.y_g * 1000);
+                                int32_t z_mg = (int32_t)(d.z_g * 1000);
+                                printf("[AUTO] X:%ld.%03ld Y:%ld.%03ld Z:%ld.%03ld g | T:%.1fs\r\n",
+                                       x_mg/1000, (x_mg<0?-x_mg:x_mg)%1000,
+                                       y_mg/1000, (y_mg<0?-y_mg:y_mg)%1000,
+                                       z_mg/1000, (z_mg<0?-z_mg:z_mg)%1000,
+                                       (float)(HAL_GetTick() - rec_start)/1000.0f);
+                                last_print = HAL_GetTick();
+                            }
+                            HAL_Delay(10);
                         }
-                        prev_mag = current_mag;
-
-                        if ((d.x_g > 2.0f || d.x_g < -2.0f) ||
-                            (d.y_g > 2.0f || d.y_g < -2.0f) ||
-                            (d.z_g > 2.0f || d.z_g < -2.0f)) {
-                            printf("\r\n[AUTO] EARTHQUAKE/SHOCK DETECTED (>2.0G)! Aborting...\r\n");
-                            earthquake_detected = 1;
-                            break;
-                        }
-                        (void)ADXL355_Get_FIFO_Entries();
-                        uint32_t current_tick = HAL_GetTick();
-                        uint32_t elapsed_ms = current_tick - start_tick;
-                        uint32_t base_sec = 1767817653;
-                        uint32_t rel_sec = elapsed_ms / 1000;
-                        uint32_t rel_us = (elapsed_ms % 1000) * 1000;
-                        int32_t x_ug = (int32_t)(d.x_g * 1000000);
-                        int32_t y_ug = (int32_t)(d.y_g * 1000000);
-                        int32_t z_ug = (int32_t)(d.z_g * 1000000);
-                        sprintf(buffer, "%lu.%06lu;%lu.%06lu;%lu.%06lu;%ld.%06ld;%ld.%06ld;%ld.%06ld;%.2f;%.2f;%.2f\r\n",
-                                rel_sec, rel_us, base_sec + rel_sec, rel_us, base_sec + rel_sec, rel_us,
-                                x_ug/1000000, (x_ug<0?-x_ug:x_ug)%1000000,
-                                y_ug/1000000, (y_ug<0?-y_ug:y_ug)%1000000,
-                                z_ug/1000000, (z_ug<0?-z_ug:z_ug)%1000000,
-                                voltage_val, current_val, power_val);
-                        f_write(&fil, buffer, strlen(buffer), &bytes_written);
-                        read_index++;
-                        if (HAL_GetTick() - last_print >= 125) {
-                            int32_t x_mg = (int32_t)(d.x_g * 1000);
-                            int32_t y_mg = (int32_t)(d.y_g * 1000);
-                            int32_t z_mg = (int32_t)(d.z_g * 1000);
-                            printf("[AUTO] X:%ld.%03ld Y:%ld.%03ld Z:%ld.%03ld g\r\n",
-                                   x_mg/1000, (x_mg<0?-x_mg:x_mg)%1000,
-                                   y_mg/1000, (y_mg<0?-y_mg:y_mg)%1000,
-                                   z_mg/1000, (z_mg<0?-z_mg:z_mg)%1000);
-                            last_print = HAL_GetTick();
-                        }
-                        HAL_Delay(10);
-                    }
                     f_close(&fil);
                     if (!earthquake_detected) {
                         Queue_Append(filename);
