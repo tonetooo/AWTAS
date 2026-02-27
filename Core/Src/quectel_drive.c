@@ -37,7 +37,35 @@ static HAL_StatusTypeDef Modem_BringUpNetwork(void) {
 
     printf("[MODEM] Esperando registro en red...\r\n");
     uint32_t start = HAL_GetTick();
-    while (HAL_GetTick() - start < 60000) {
+    uint8_t diag_counter = 0;
+    while (HAL_GetTick() - start < 180000) { // Timeout aumentado a 3 min
+        
+        // Diagnostico de Estado de SIM y Operador (Cada 10s aprox)
+        if (diag_counter++ % 5 == 0) {
+             Modem_SendAT("AT+CPIN?", "+CPIN:", 1000);
+             Modem_SendAT("AT+COPS?", "+COPS:", 1000);
+             // Ver bandas configuradas por si acaso
+             // Modem_SendAT("AT+QCFG=\"band\"", "OK", 1000); 
+        }
+
+        // Check Signal Quality con limpieza de buffer y parseo robusto
+        memset(modem_rx_buffer, 0, MODEM_BUFFER_SIZE);
+        if (Modem_SendAT("AT+CSQ", "+CSQ:", 1000) == HAL_OK) {
+             // Debug: printf("[MODEM] RAW CSQ: %s\r\n", modem_rx_buffer);
+             char* p = strstr(modem_rx_buffer, "+CSQ:");
+             if (p) {
+                 int rssi = 99, ber = 99;
+                 p += 5; // Saltar "+CSQ:"
+                 while(*p == ' ') p++; // Saltar espacios
+                 
+                 if (sscanf(p, "%d,%d", &rssi, &ber) >= 1) {
+                    printf("[MODEM] Signal Quality: RSSI=%d (0-31), BER=%d\r\n", rssi, ber);
+                 } else {
+                    printf("[MODEM] Signal Quality Parse Error. RAW: %s\r\n", modem_rx_buffer);
+                 }
+             }
+        }
+
         if (Modem_SendAT("AT+CEREG?", "+CEREG: 0,1", 2000) == HAL_OK ||
             Modem_SendAT("AT+CEREG?", "+CEREG: 0,5", 2000) == HAL_OK ||
             Modem_SendAT("AT+CREG?", "+CREG: 0,1", 2000) == HAL_OK  ||
@@ -45,11 +73,21 @@ static HAL_StatusTypeDef Modem_BringUpNetwork(void) {
             printf("[MODEM] Registrado en red movil.\r\n");
             break;
         }
-        HAL_Delay(1000);
+        
+        // Si recibimos "0,3" (Denied), intentar recuperación
+        if (strstr(modem_rx_buffer, ": 0,3")) {
+             printf("[MODEM] Registro DENEGADO (0,3). Intentando reinicio de RF...\r\n");
+             Modem_SendAT("AT+CFUN=0", "OK", 5000); // Modo avion
+             HAL_Delay(2000);
+             Modem_SendAT("AT+CFUN=1", "OK", 5000); // Modo normal
+             HAL_Delay(5000); // Esperar a que inicie RF
+        }
+        
+        HAL_Delay(2000);
     }
 
-    if (HAL_GetTick() - start >= 60000) {
-        printf("[MODEM] Tiempo de registro agotado.\r\n");
+    if (HAL_GetTick() - start >= 180000) {
+        printf("[MODEM] Tiempo de registro agotado (3 min).\r\n");
         return HAL_ERROR;
     }
 
